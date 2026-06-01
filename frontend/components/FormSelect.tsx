@@ -7,7 +7,7 @@ export function FormSelect({ className, children, ...props }: Props) {
   return (
     <select
       className={cn(
-        "h-9 rounded-md border border-neutral-300 bg-white px-3 py-1 text-sm",
+        "h-9 rounded-md border border-neutral-300 bg-white py-1 pl-3 pr-8 text-sm",
         className
       )}
       {...props}

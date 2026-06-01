@@ -1,5 +1,9 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export function documentFileUrl(documentId: string): string {
+  return `${API_URL}/documents/${documentId}/file`;
+}
+
 export type Workspace = {
   id: string;
   name: string;
@@ -19,6 +23,18 @@ export type DocumentRecord = {
   text_source: string | null;
   ocr_engine: string | null;
   created_at: string;
+};
+
+export type ChunkRecord = {
+  id: string;
+  document_id: string;
+  page_number: number;
+  chunk_type: "heading" | "paragraph" | "table" | "list";
+  bbox: Record<string, number>;
+  text_content: string;
+  heading_path: string | null;
+  section_key: string | null;
+  token_count: number | null;
 };
 
 export type OcrHealth = {
@@ -204,6 +220,10 @@ export const picardApi = {
     });
   },
   getDocument: (id: string) => request<DocumentRecord>(`/documents/${id}`),
+  getDocumentChunks: (documentId: string, params?: { page?: number }) => {
+    const qs = params?.page != null ? `?page=${params.page}` : "";
+    return request<ChunkRecord[]>(`/documents/${documentId}/chunks${qs}`);
+  },
   getOcrHealth: () => request<OcrHealth>("/health/ocr"),
   retryDocument: (id: string) =>
     request<{ job_id: string; document_id: string }>(`/documents/${id}/retry`, { method: "POST" }),

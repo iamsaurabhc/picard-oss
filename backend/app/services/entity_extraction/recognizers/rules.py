@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Rule-based entity recognizers (legacy).
+
+Semantic org/party patterns are off the hot path when ENABLE_RULE_ENTITY_EXTRACT=false
+and ENABLE_REGEX_NLP=false. Ingest uses extract_document_semantics (SLM) by default.
+"""
+
 import re
 
 import dateparser

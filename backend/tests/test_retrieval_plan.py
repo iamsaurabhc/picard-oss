@@ -15,8 +15,8 @@ from app.services.query_understanding import (
 )
 
 
-def test_no_hardcoded_corpus_tokens_in_fallback_passes():
-    settings.enable_llm_query_understanding = False
+def test_no_hardcoded_corpus_tokens_in_fallback_passes(mock_query_planner):
+    mock_query_planner("chester_overview")
     u = understand_query("List all case details involving Smith v Jones")
     labels = {p.label for p in u.search_passes}
     assert "parties" in labels or "central_facts" in labels
@@ -27,6 +27,7 @@ def test_no_hardcoded_corpus_tokens_in_fallback_passes():
 
 def test_factual_amount_query_forces_simple():
     settings.enable_llm_query_understanding = False
+    settings.enable_regex_nlp = True
     u = understand_query("amount claimed by janet smith?")
     assert u.intent == "factual_lookup"
     assert u.retrieval_mode == "SIMPLE"
@@ -96,6 +97,7 @@ def test_facet_queries_populated_from_search_passes():
 
 def test_compound_factual_fallback_single_generic_pass():
     settings.enable_llm_query_understanding = False
+    settings.enable_regex_nlp = True
     q = "janet chester son's name? age? date of accident?"
     u = understand_query(q)
     assert u.intent == "factual_lookup"

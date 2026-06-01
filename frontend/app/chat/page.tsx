@@ -15,6 +15,7 @@ import { DocumentMultiSelect } from "@/components/DocumentMultiSelect";
 import { MarkdownWithCitations } from "@/components/MarkdownWithCitations";
 import { PreResponseWrapper } from "@/components/PreResponseWrapper";
 import { MultiHighlightPDFViewer } from "@/components/MultiHighlightPDFViewer";
+import { cn } from "@/lib/utils";
 
 type UiMessage = {
   role: string;
@@ -53,6 +54,7 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false);
   const [retrieval, setRetrieval] = useState<ChatStreamEvent | null>(null);
   const [activeRef, setActiveRef] = useState<ChatReference | null>(null);
+  const [activeMessageRefs, setActiveMessageRefs] = useState<ChatReference[] | null>(null);
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const streamingRef = useRef(false);
 
@@ -123,9 +125,6 @@ export default function ChatPage() {
           refs = ev.references ?? [];
           refused = !!ev.refused;
           suggestions = ev.suggestions ?? [];
-          if (refs[0]) {
-            setPdfDocId(refs[0].document_id);
-          }
           setMessages((m) =>
             upsertAssistantMessage(m, assistant, {
               references: refused ? undefined : refs,
@@ -158,9 +157,9 @@ export default function ChatPage() {
     }
   };
 
-  const activeHighlights = activeRef
-    ? messages.find((m) => m.references?.some((r) => r.index === activeRef.index))?.references ?? []
-    : messages.filter((m) => m.references?.length).at(-1)?.references ?? [];
+  const activeHighlights = activeMessageRefs ?? [];
+
+  const showPdfPanel = pdfDocId != null && activeRef != null;
 
   return (
     <div className="flex h-[calc(100vh)] flex-col">
@@ -178,6 +177,9 @@ export default function ChatPage() {
             setWorkspaceId(e.target.value);
             setSessionId(null);
             setDocumentIds([]);
+            setPdfDocId(null);
+            setActiveRef(null);
+            setActiveMessageRefs(null);
           }}
         >
           {(workspaces ?? []).map((w) => (
@@ -193,38 +195,53 @@ export default function ChatPage() {
         />
       </header>
 
-      <div className="grid flex-1 grid-cols-2 divide-x divide-neutral-200 overflow-hidden">
+      <div
+        className={cn(
+          "grid flex-1 overflow-hidden",
+          showPdfPanel && "grid-cols-2 divide-x divide-neutral-200"
+        )}
+      >
         <div className="flex flex-col overflow-hidden">
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
             {messages.map((m, i) => (
               <div
                 key={i}
-                className={`rounded-lg p-3 text-sm ${
-                  m.role === "user" ? "ml-8 bg-neutral-100" : "mr-8 border border-neutral-200 bg-white"
-                }`}
+                className={cn("flex w-full", m.role === "user" ? "justify-end" : "justify-start")}
               >
-                {m.refused ? (
-                  <div>
-                    <p className="font-medium text-amber-800">No evidence found</p>
-                    <MarkdownWithCitations text={m.content} className="mt-1" />
-                    {m.suggestions && m.suggestions.length > 0 && (
-                      <ul className="mt-2 list-disc pl-5 text-neutral-600">
-                        {m.suggestions.map((s) => (
-                          <li key={s}>{s}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : (
-                  <MarkdownWithCitations
-                    text={m.content}
-                    references={m.references}
-                    onCitationClick={(ref) => {
-                      setActiveRef(ref);
-                      setPdfDocId(ref.document_id);
-                    }}
-                  />
-                )}
+                <div
+                  className={cn(
+                    "max-w-[85%] text-sm",
+                    m.role === "user"
+                      ? "rounded-2xl rounded-br-sm bg-neutral-900 px-4 py-2.5 text-neutral-50"
+                      : "rounded-2xl rounded-bl-sm border border-neutral-200 bg-white px-4 py-3 text-neutral-900"
+                  )}
+                >
+                  {m.role === "user" ? (
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+                  ) : m.refused ? (
+                    <div>
+                      <p className="font-medium text-neutral-700">No evidence found</p>
+                      <MarkdownWithCitations text={m.content} className="mt-1" />
+                      {m.suggestions && m.suggestions.length > 0 && (
+                        <ul className="mt-2 list-disc pl-5 text-neutral-600">
+                          {m.suggestions.map((s) => (
+                            <li key={s}>{s}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ) : (
+                    <MarkdownWithCitations
+                      text={m.content}
+                      references={m.references}
+                      onCitationClick={(ref) => {
+                        setActiveRef(ref);
+                        setActiveMessageRefs(m.references ?? []);
+                        setPdfDocId(ref.document_id);
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             ))}
             {streaming && retrieval && retrieval.event === "retrieval" && (
@@ -251,12 +268,14 @@ export default function ChatPage() {
           </form>
         </div>
 
-        <MultiHighlightPDFViewer
-          documentId={pdfDocId}
-          highlights={activeHighlights}
-          activeIndex={activeRef?.index ?? null}
-          activeRef={activeRef}
-        />
+        {showPdfPanel ? (
+          <MultiHighlightPDFViewer
+            documentId={pdfDocId}
+            highlights={activeHighlights}
+            activeIndex={activeRef?.index ?? null}
+            activeRef={activeRef}
+          />
+        ) : null}
       </div>
     </div>
   );

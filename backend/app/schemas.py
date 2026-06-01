@@ -50,6 +50,18 @@ class DocumentRetryAllOut(BaseModel):
     document_ids: list[str]
 
 
+class ChunkOut(BaseModel):
+    id: str
+    document_id: str
+    page_number: int
+    chunk_type: Literal["heading", "paragraph", "table", "list"]
+    bbox: dict
+    text_content: str
+    heading_path: str | None
+    section_key: str | None
+    token_count: int | None
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     workspace_id: str

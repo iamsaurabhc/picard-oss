@@ -8,6 +8,7 @@ from app.config import settings
 
 def test_rule_metadata_nda(db_session):
     settings.enable_metadata_llm = False
+    settings.enable_slm_entity_extract = False
     now = utc_now_iso()
     ws = Workspace(id=str(uuid.uuid4()), name="T", matter_ref=None, created_at=now, updated_at=now)
     db_session.add(ws)

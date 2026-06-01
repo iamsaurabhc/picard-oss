@@ -1,0 +1,82 @@
+{
+  "google_listing": {
+    "retrieval_mode": "SIMPLE",
+    "intent": "entity_matter_listing",
+    "target_entity": {
+      "canonical": "google llc",
+      "surfaces": ["Google LLC"]
+    },
+    "constraints": [
+      {
+        "type": "party",
+        "canonical": "google llc",
+        "surfaces": ["Google LLC"]
+      }
+    ],
+    "fts": {
+      "must_terms": ["google", "llc"],
+      "should_terms": [],
+      "phrases": ["Google LLC"],
+      "operator": "AND"
+    },
+    "search_passes": [
+      {
+        "label": "entity_anchor",
+        "fts_terms": ["google", "llc"],
+        "operator": "AND",
+        "pin_best": false
+      }
+    ],
+    "coverage_goal": "per-document matter listing",
+    "confidence": 0.9
+  },
+  "chester_overview": {
+    "retrieval_mode": "SIMPLE",
+    "intent": "case_overview",
+    "target_entity": null,
+    "constraints": [],
+    "fts": {
+      "must_terms": ["chester", "waverley"],
+      "should_terms": [],
+      "phrases": [],
+      "operator": "AND"
+    },
+    "search_passes": [
+      {"label": "parties", "fts_terms": ["plaintiff", "defendant"], "operator": "AND", "pin_best": true},
+      {"label": "central_facts", "fts_terms": ["facts", "occurred"], "operator": "AND", "pin_best": true},
+      {"label": "damages", "fts_terms": ["damages", "claimed"], "operator": "AND", "pin_best": true},
+      {"label": "dates", "fts_terms": ["date", "trial"], "operator": "AND", "pin_best": true}
+    ],
+    "coverage_goal": "broad matter summary",
+    "confidence": 0.88
+  },
+  "google_india_listing": {
+    "retrieval_mode": "SIMPLE",
+    "intent": "entity_matter_listing",
+    "target_entity": {
+      "canonical": "google india private limited",
+      "surfaces": ["Google India Private Limited"]
+    },
+    "constraints": [
+      {
+        "type": "party",
+        "canonical": "google india private limited",
+        "surfaces": ["Google India Private Limited"]
+      }
+    ],
+    "fts": {
+      "must_terms": ["google", "india"],
+      "operator": "AND"
+    },
+    "search_passes": [
+      {
+        "label": "entity_anchor",
+        "fts_terms": ["google", "india"],
+        "operator": "AND",
+        "pin_best": false
+      }
+    ],
+    "coverage_goal": "per-document matter listing",
+    "confidence": 0.85
+  }
+}

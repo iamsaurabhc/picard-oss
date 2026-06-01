@@ -32,6 +32,24 @@ def _upsert_tag(db: Session, document_id: str, key: str, value: str) -> None:
         )
 
 
+def _doc_type_from_filename(file_name: str) -> str | None:
+    """Mechanical filename doc_type — not NLP regex entity extraction."""
+    n = file_name.casefold()
+    if "nda" in n:
+        return "nda"
+    if "msa" in n or "master_service" in n:
+        return "msa"
+    if "lease" in n:
+        return "lease"
+    if any(k in n for k in ("complaint", "petition", "judgment", "appeal")):
+        return "litigation"
+    if any(k in n for k in ("regulation", "cci", "commission", "informant")):
+        return "regulatory"
+    if "agreement" in n or "contract" in n:
+        return "contract"
+    return None
+
+
 def _rule_extract_from_index(db: Session, doc: Document) -> None:
     """Derive party tags from entity index when SLM is unavailable."""
     parties = db.scalars(
@@ -61,12 +79,15 @@ def extract_metadata_for_document(db: Session, document_id: str) -> None:
         )
     )
 
-    if settings.enable_slm_entity_extract and llm_available():
-        if not has_doc_type:
-            from app.services.entity_extraction.slm_document import extract_document_semantics
-
-            extract_document_semantics(db, document_id)
+    if settings.enable_slm_entity_extract:
+        if has_doc_type:
             return
+        doc_type = _doc_type_from_filename(doc.file_name)
+        if doc_type:
+            _upsert_tag(db, document_id, "doc_type", doc_type)
+        _rule_extract_from_index(db, doc)
+        db.commit()
+        return
 
     if settings.enable_metadata_llm and llm_available():
         from app.services.entity_extraction.slm_document import extract_document_semantics
@@ -75,5 +96,9 @@ def extract_metadata_for_document(db: Session, document_id: str) -> None:
         db.commit()
         return
 
+    if not has_doc_type:
+        doc_type = _doc_type_from_filename(doc.file_name)
+        if doc_type:
+            _upsert_tag(db, document_id, "doc_type", doc_type)
     _rule_extract_from_index(db, doc)
     db.commit()

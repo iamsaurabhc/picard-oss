@@ -1,3 +1,4 @@
+import json
 import os
 import pytest
 from fastapi.testclient import TestClient
@@ -127,11 +128,75 @@ def test_sessionmaker(db_engine):
     return sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
 
 
+_PLANNER_FIXTURES_PATH = Path(__file__).resolve().parent / "fixtures" / "query_planner_responses.json"
+
+
+def _load_planner_fixture(name: str) -> dict:
+    data = json.loads(_PLANNER_FIXTURES_PATH.read_text())
+    return data[name]
+
+
+@pytest.fixture()
+def mock_query_planner(monkeypatch):
+    """Patch _llm_understand to return fixture JSON for named planner responses."""
+
+    def _apply(name: str):
+        payload = _load_planner_fixture(name)
+
+        def _fake_llm(query: str, document_context=None):
+            from app.services.query_understanding import (
+                FtsPlan,
+                QueryConstraint,
+                QueryUnderstanding,
+                SearchPass,
+                _parse_search_passes,
+                _parse_target_entity,
+            )
+
+            te = _parse_target_entity(payload.get("target_entity"))
+            constraints = [
+                QueryConstraint(**c) for c in payload.get("constraints", []) if isinstance(c, dict)
+            ]
+            fts_data = payload.get("fts") or {}
+            return QueryUnderstanding(
+                retrieval_mode=payload.get("retrieval_mode", "SIMPLE"),
+                intent=payload.get("intent", "general"),
+                target_entity=te,
+                constraints=constraints,
+                fts=FtsPlan(
+                    must_terms=fts_data.get("must_terms", []),
+                    should_terms=fts_data.get("should_terms", []),
+                    phrases=fts_data.get("phrases", []),
+                    operator=fts_data.get("operator", "AND"),
+                ),
+                search_passes=_parse_search_passes(payload.get("search_passes") or []),
+                coverage_goal=str(payload.get("coverage_goal") or ""),
+                confidence=float(payload.get("confidence", 0.9)),
+                used_llm=True,
+            )
+
+        monkeypatch.setattr(
+            "app.services.query_understanding._llm_understand",
+            _fake_llm,
+        )
+        monkeypatch.setattr("app.config.settings.enable_llm_query_understanding", True)
+        return _fake_llm
+
+    return _apply
+
+
 @pytest.fixture(autouse=True)
 def _reset_slm_flags():
     """Isolate tests that toggle SLM feature flags."""
+    settings.enable_llm_query_understanding = True
+    settings.enable_regex_nlp = False
+    settings.enable_slm_entity_extract = True
+    settings.enable_rule_entity_extract = False
     yield
     settings.enable_llm_query_understanding = True
+    settings.enable_regex_nlp = False
+    settings.enable_slm_entity_extract = True
+    settings.enable_rule_entity_extract = False
     settings.enable_context_ranker = True
     settings.enable_excerpt_selector = True
     settings.query_planner_repair_on_zero_hits = True

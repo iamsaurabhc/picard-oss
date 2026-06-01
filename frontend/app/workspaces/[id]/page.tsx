@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -160,7 +161,18 @@ export default function WorkspaceDetailPage() {
             ) : (
               documents.map((doc) => (
                 <tr key={doc.id} className="border-t border-neutral-100">
-                  <td className="px-4 py-3">{doc.file_name}</td>
+                  <td className="px-4 py-3">
+                    {doc.parse_status === "done" ? (
+                      <Link
+                        href={`/workspaces/${workspaceId}/documents/${doc.id}`}
+                        className="font-medium text-neutral-900 hover:underline"
+                      >
+                        {doc.file_name}
+                      </Link>
+                    ) : (
+                      doc.file_name
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={doc.parse_status} />
                     {doc.parse_error ? (

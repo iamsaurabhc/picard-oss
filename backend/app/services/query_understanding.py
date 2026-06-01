@@ -243,14 +243,19 @@ def _is_entity_matter_listing_query(query: str) -> bool:
 def _looks_like_entity_listing_query(query: str) -> bool:
     """Keyword hints for catalog fallback — not regex intent classifiers."""
     q = query.casefold()
-    if not any(h in q for h in _LISTING_QUERY_HINTS) and "list" not in q:
+    if re.search(r"\s+v\.?\s+", query, re.IGNORECASE):
+        if not any(h in q for h in _LISTING_SCOPE_HINTS):
+            return False
+    if not any(h in q for h in _LISTING_SCOPE_HINTS):
         return False
-    return any(h in q for h in _LISTING_SCOPE_HINTS) or ("list" in q and "all" in q)
+    return any(h in q for h in _LISTING_QUERY_HINTS) or ("list" in q and "all" in q)
 
 
 def _party_from_listing_phrase(query: str) -> QueryConstraint | None:
     """Extract party after against/involving without ORG_PARTY_PATTERN."""
     q = query.casefold()
+    if "case details" in q or "case detail" in q:
+        return None
     for marker in ("against ", "involving ", "re "):
         if marker in q:
             idx = q.index(marker) + len(marker)
@@ -912,7 +917,7 @@ def _case_name_terms(query: str) -> list[str] | None:
             left = _extract_tokens(parts[0])
             right = _extract_tokens(parts[1])
             if left and right:
-                return _dedupe_terms(left[:1] + right[-1:])
+                return _dedupe_terms([left[-1], right[0]])
         return None
     match = re.search(
         r"\b([A-Z][a-z]+)\s+v\.?\s+(.+?)(?:\?|$|\s+(?:negligence|damages|facts|details))",

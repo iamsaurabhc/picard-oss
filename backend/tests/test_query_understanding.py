@@ -48,6 +48,7 @@ def test_understand_query_llm_success():
 
 def test_understand_query_merges_rule_constraints():
     settings.enable_llm_query_understanding = True
+    settings.enable_regex_nlp = True
     payload = {
         "retrieval_mode": "SIMPLE",
         "intent": "general",

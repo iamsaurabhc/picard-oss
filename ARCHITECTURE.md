@@ -312,12 +312,12 @@ User query
         Skip if synthesis cited ≤3 chunks (overhead not worth it)
 ```
 
-**Rule-first, SLM-fallback** is the key pattern for ConstraintQueryPlanner:
+**SLM-primary, token+catalog fallback** is the ConstraintQueryPlanner pattern (cloud hybrid v1):
 
-1. Regex + entity catalog lookup extracts party/date/condition
-2. If all constraints found with confidence ≥ 0.9 → **skip SLM** (saves latency on obvious queries like yours)
-3. If partial or ambiguous → one SLM call with strict JSON schema output
-4. If SLM unavailable → proceed with rule extraction; CARP may widen proximity or refuse with diagnostics
+1. One SLM JSON call per query (`query_understanding.py`) — intent, `target_entity`, constraints, `search_passes`
+2. If SLM unavailable → tokenize query + `resolve_party_canonicals` against workspace catalog (no regex intent classifiers)
+3. Legacy regex NLP (`ENABLE_REGEX_NLP=true`) is an emergency kill-switch only — off by default
+4. CARP / FTS / refuse gate remain deterministic SQL
 
 ---
 
@@ -747,7 +747,7 @@ For each chunk:
 
 Runs before or alongside entity extract; feeds doc-type routing and party gazetteers:
 
-- Document type (NDA, MSA, lease, agreement) — filename rules + optional SLM (`metadata_extractor.py`)
+- Document type (NDA, MSA, lease, agreement) — **`extract_document_semantics`** SLM on first 5 pages (`slm_document.py`); `metadata_extractor.py` indexes tags from entity index when SLM is off
 - Primary party names (feeds party extraction priors)
 - Effective date, governing law
 
@@ -757,7 +757,7 @@ Stored in `metadata_tags` for coarse pre-filtering (`filter_documents_by_metadat
 
 #### 8.3.3 Hybrid extraction architecture (target state)
 
-Production-grade extraction is **rule-first, document-type-routed, NER-augmented** — not regex-only or LLM-per-chunk.
+Production ingest (cloud hybrid v1) is **one bounded SLM call per document** (`ENABLE_SLM_ENTITY_EXTRACT`) writing `metadata_tags` + `entities` + `page_entities`. Rule/GLiNER layers remain behind `ENABLE_RULE_ENTITY_EXTRACT` / `ENABLE_NER_ENTITY_EXTRACT` for local-first phases — not the default hot path.
 
 ```mermaid
 flowchart TB

@@ -10,7 +10,16 @@ def test_normalize_date():
     assert normalize_date("18/05/2019") == "2019-05-18"
 
 
-def test_entity_extract_condition_and_date(db_session):
+def test_entity_extract_condition_and_date(db_session, monkeypatch):
+    from app.config import settings
+
+    settings.enable_slm_entity_extract = False
+    settings.enable_rule_entity_extract = True
+    monkeypatch.setattr(
+        "app.services.entity_extraction.slm_document.llm_available",
+        lambda: False,
+    )
+    monkeypatch.setattr("app.services.entity_extraction.llm_available", lambda: False)
     now = utc_now_iso()
     ws = Workspace(id=str(uuid.uuid4()), name="Test", matter_ref=None, created_at=now, updated_at=now)
     db_session.add(ws)
