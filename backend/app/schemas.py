@@ -1,0 +1,134 @@
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class WorkspaceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    matter_ref: str | None = None
+
+
+class WorkspaceUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    matter_ref: str | None = None
+
+
+class WorkspaceOut(BaseModel):
+    id: str
+    name: str
+    matter_ref: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentOut(BaseModel):
+    id: str
+    workspace_id: str
+    file_name: str
+    content_hash: str | None
+    page_count: int | None
+    parse_status: str
+    parse_error: str | None
+    text_source: str | None = None
+    ocr_engine: str | None = None
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class OcrHealthOut(BaseModel):
+    configured: bool
+    server_url: str | None
+    reachable: bool
+    engine: str
+
+
+class DocumentRetryAllOut(BaseModel):
+    retried_count: int
+    document_ids: list[str]
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    workspace_id: str
+    top_k: int = 12
+    document_ids: list[str] | None = None
+    metadata_filters: dict[str, str] | None = None
+    retrieval_mode: Literal["auto", "simple", "multi_constraint"] = "auto"
+    proximity_max_tier: str = "SAME_SECTION"
+    allow_partial_disclosure: bool = False
+    min_score: float | None = None
+
+
+class SearchHit(BaseModel):
+    chunk_id: str
+    document_id: str
+    page_number: int
+    text_content: str
+    heading_path: str | None
+    section_key: str | None = None
+    bbox: dict | None = None
+    score: float
+
+
+class ContextBundleOut(BaseModel):
+    bundle_id: str
+    document_id: str
+    page_start: int
+    page_end: int
+    section_key: str | None
+    heading_path: str | None
+    chunk_ids: list[str]
+    constraints_matched: list[str]
+    constraints_missing: list[str]
+    proximity_tier: str
+    bm25_score: float
+    coherence_score: float
+    score: float
+
+
+class SearchResponse(BaseModel):
+    mode: Literal["SIMPLE", "MULTI_CONSTRAINT"]
+    hits: list[SearchHit]
+    bundles: list[ContextBundleOut] | None = None
+    retrieval_diagnostics: dict | None = None
+    proximity_tier_used: str | None = None
+    refused: bool = False
+    expanded_query: str | None = None
+    suggestions: list[str] = Field(default_factory=list)
+
+
+class ChatSessionCreate(BaseModel):
+    workspace_id: str
+    title: str | None = None
+
+
+class ChatSessionOut(BaseModel):
+    id: str
+    workspace_id: str | None
+    title: str | None
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class ChatMessageOut(BaseModel):
+    id: str
+    session_id: str
+    role: str
+    content: str
+    references: list[dict] | None = None
+    refused: bool = False
+    created_at: str
+
+
+class ChatStreamRequest(BaseModel):
+    session_id: str
+    workspace_id: str
+    message: str = Field(min_length=1)
+    document_ids: list[str] | None = None
+    retrieval_mode: Literal["auto", "simple", "multi_constraint"] = "auto"
+    allow_partial_disclosure: bool = False
+    top_k: int = 12

@@ -1,0 +1,168 @@
+"use client";
+
+import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
+import type { ChatReference } from "@/lib/picardApi";
+import { cn } from "@/lib/utils";
+
+const MARKER = /\[(\d+)\]/g;
+
+type Segment =
+  | { type: "text"; content: string }
+  | { type: "citation"; index: number };
+
+function splitSegments(text: string): Segment[] {
+  const segments: Segment[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  const re = new RegExp(MARKER.source, "g");
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) {
+      segments.push({ type: "text", content: text.slice(last, match.index) });
+    }
+    segments.push({ type: "citation", index: parseInt(match[1], 10) });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    segments.push({ type: "text", content: text.slice(last) });
+  }
+  return segments;
+}
+
+function CitationButton({
+  index,
+  reference,
+  onCitationClick,
+}: {
+  index: number;
+  reference?: ChatReference;
+  onCitationClick?: (ref: ChatReference) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="mx-0.5 inline rounded bg-neutral-200 px-1.5 py-0.5 text-xs font-medium text-neutral-800 hover:bg-neutral-300 align-baseline"
+      onClick={() => reference && onCitationClick?.(reference)}
+    >
+      [{index}]
+    </button>
+  );
+}
+
+function renderInlineCitations(
+  text: string,
+  byIndex: Map<number, ChatReference>,
+  onCitationClick?: (ref: ChatReference) => void,
+  keyPrefix = ""
+): React.ReactNode {
+  const segments = splitSegments(text);
+  if (segments.length === 1 && segments[0].type === "text") {
+    return text;
+  }
+  return segments.map((seg, i) => {
+    if (seg.type === "citation") {
+      return (
+        <CitationButton
+          key={`${keyPrefix}-cite-${i}-${seg.index}`}
+          index={seg.index}
+          reference={byIndex.get(seg.index)}
+          onCitationClick={onCitationClick}
+        />
+      );
+    }
+    return <React.Fragment key={`${keyPrefix}-text-${i}`}>{seg.content}</React.Fragment>;
+  });
+}
+
+function injectCitations(
+  children: React.ReactNode,
+  byIndex: Map<number, ChatReference>,
+  onCitationClick?: (ref: ChatReference) => void,
+  keyPrefix = ""
+): React.ReactNode {
+  if (children == null) return children;
+  if (typeof children === "string") {
+    return renderInlineCitations(children, byIndex, onCitationClick, keyPrefix);
+  }
+  if (Array.isArray(children)) {
+    return children.map((child, i) => {
+      const prefix = `${keyPrefix}-${i}`;
+      if (typeof child === "string") {
+        return (
+          <React.Fragment key={prefix}>
+            {renderInlineCitations(child, byIndex, onCitationClick, prefix)}
+          </React.Fragment>
+        );
+      }
+      if (React.isValidElement<{ children?: React.ReactNode }>(child)) {
+        return React.cloneElement(child, {
+          key: child.key ?? prefix,
+          children: injectCitations(child.props.children, byIndex, onCitationClick, prefix),
+        });
+      }
+      return child;
+    });
+  }
+  if (React.isValidElement<{ children?: React.ReactNode }>(children)) {
+    return React.cloneElement(children, {
+      children: injectCitations(children.props.children, byIndex, onCitationClick, keyPrefix),
+    });
+  }
+  return children;
+}
+
+function makeCitationComponents(
+  byIndex: Map<number, ChatReference>,
+  onCitationClick?: (ref: ChatReference) => void
+): Components {
+  const wrap =
+    (Tag: keyof React.JSX.IntrinsicElements): Components[string] =>
+    ({ children, ...props }) =>
+      <Tag {...props}>{injectCitations(children, byIndex, onCitationClick)}</Tag>;
+
+  return {
+    p: wrap("p"),
+    li: wrap("li"),
+    h1: wrap("h1"),
+    h2: wrap("h2"),
+    h3: wrap("h3"),
+    h4: wrap("h4"),
+    h5: wrap("h5"),
+    h6: wrap("h6"),
+    td: wrap("td"),
+    th: wrap("th"),
+    blockquote: wrap("blockquote"),
+    strong: wrap("strong"),
+    em: wrap("em"),
+  };
+}
+
+type Props = {
+  text: string;
+  references?: ChatReference[];
+  onCitationClick?: (ref: ChatReference) => void;
+  className?: string;
+};
+
+export function MarkdownWithCitations({
+  text,
+  references = [],
+  onCitationClick,
+  className,
+}: Props) {
+  const byIndex = new Map(references.map((r) => [r.index, r]));
+  const components = React.useMemo(
+    () => makeCitationComponents(byIndex, onCitationClick),
+    [byIndex, onCitationClick]
+  );
+
+  return (
+    <div className={cn("prose-picard", className)}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
