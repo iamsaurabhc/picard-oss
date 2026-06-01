@@ -13,7 +13,8 @@ import { Input } from "@/components/ui/input";
 import { FormSelect } from "@/components/FormSelect";
 import { DocumentMultiSelect } from "@/components/DocumentMultiSelect";
 import { MarkdownWithCitations } from "@/components/MarkdownWithCitations";
-import { PreResponseWrapper } from "@/components/PreResponseWrapper";
+import { RetrievalActivityPanel } from "@/components/chat/RetrievalActivityPanel";
+import { useRetrievalActivity } from "@/components/chat/useRetrievalActivity";
 import { MultiHighlightPDFViewer } from "@/components/MultiHighlightPDFViewer";
 import { cn } from "@/lib/utils";
 
@@ -52,11 +53,11 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [retrieval, setRetrieval] = useState<ChatStreamEvent | null>(null);
   const [activeRef, setActiveRef] = useState<ChatReference | null>(null);
   const [activeMessageRefs, setActiveMessageRefs] = useState<ChatReference[] | null>(null);
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const streamingRef = useRef(false);
+  const activity = useRetrievalActivity();
 
   const { data: workspaces } = useQuery({
     queryKey: ["workspaces"],
@@ -95,6 +96,8 @@ export default function ChatPage() {
     loadHistory();
   }, [loadHistory]);
 
+  const showActivityPanel = streaming || activity.steps.length > 0;
+
   const onSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sessionId || !ws || !input.trim() || streaming) return;
@@ -103,11 +106,31 @@ export default function ChatPage() {
     setMessages((m) => [...m, { role: "user", content: userText }]);
     setStreaming(true);
     streamingRef.current = true;
-    setRetrieval(null);
+    activity.reset();
+    activity.start();
     let assistant = "";
     let refs: ChatReference[] = [];
     let refused = false;
     let suggestions: string[] = [];
+
+    const ingestStreamEvent = (ev: ChatStreamEvent) => {
+      activity.ingestEvent(ev);
+      if (ev.event === "content" && "delta" in ev) {
+        assistant += ev.delta;
+        setMessages((m) => upsertAssistantMessage(m, assistant));
+      } else if (ev.event === "references") {
+        refs = ev.references ?? [];
+        refused = !!ev.refused;
+        suggestions = ev.suggestions ?? [];
+        setMessages((m) =>
+          upsertAssistantMessage(m, assistant, {
+            references: refused ? undefined : refs,
+            refused,
+            suggestions: refused ? suggestions : undefined,
+          })
+        );
+      }
+    };
 
     try {
       for await (const ev of picardApi.streamChat({
@@ -116,25 +139,10 @@ export default function ChatPage() {
         message: userText,
         document_ids: documentIds.length ? documentIds : undefined,
       })) {
-        if (ev.event === "retrieval") {
-          setRetrieval(ev);
-        } else if (ev.event === "content" && "delta" in ev) {
-          assistant += ev.delta;
-          setMessages((m) => upsertAssistantMessage(m, assistant));
-        } else if (ev.event === "references") {
-          refs = ev.references ?? [];
-          refused = !!ev.refused;
-          suggestions = ev.suggestions ?? [];
-          setMessages((m) =>
-            upsertAssistantMessage(m, assistant, {
-              references: refused ? undefined : refs,
-              refused,
-              suggestions: refused ? suggestions : undefined,
-            })
-          );
-        } else if (ev.event === "error") {
+        if (ev.event === "error") {
           throw new Error(ev.detail);
         }
+        ingestStreamEvent(ev);
       }
       setMessages((m) =>
         upsertAssistantMessage(m, assistant, {
@@ -153,7 +161,7 @@ export default function ChatPage() {
     } finally {
       streamingRef.current = false;
       setStreaming(false);
-      setRetrieval(null);
+      activity.finish();
     }
   };
 
@@ -180,6 +188,7 @@ export default function ChatPage() {
             setPdfDocId(null);
             setActiveRef(null);
             setActiveMessageRefs(null);
+            activity.reset();
           }}
         >
           {(workspaces ?? []).map((w) => (
@@ -244,14 +253,13 @@ export default function ChatPage() {
                 </div>
               </div>
             ))}
-            {streaming && retrieval && retrieval.event === "retrieval" && (
-              <PreResponseWrapper
-                loading={false}
-                mode={retrieval.mode}
-                chunkCount={retrieval.chunk_count}
-                bundleCount={retrieval.bundle_count}
-                refused={retrieval.refused}
-                diagnostics={retrieval.diagnostics ?? null}
+            {showActivityPanel && (
+              <RetrievalActivityPanel
+                steps={activity.steps}
+                stepCount={activity.stepCount}
+                isStreaming={streaming}
+                shouldMinimize={activity.shouldMinimize}
+                retrievalSummary={activity.retrievalSummary}
               />
             )}
           </div>

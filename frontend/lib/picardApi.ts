@@ -134,7 +134,39 @@ export type ChatStreamRequest = {
   top_k?: number;
 };
 
+export type ChatProgressPhase = "understanding" | "search" | "rank" | "generate";
+export type ChatProgressStatus = "start" | "done";
+
 export type ChatStreamEvent =
+  | {
+      event: "progress";
+      phase: ChatProgressPhase;
+      status: ChatProgressStatus;
+      intent?: string;
+      mode?: string;
+      pass_count?: number;
+      used_llm?: boolean;
+      label?: string;
+      strategy?: string;
+      hit_count?: number;
+      ranked_count?: number;
+      constraint_count?: number;
+      intersection_pages?: number;
+      document_name?: string;
+      documents_discovered?: number;
+      target_entity?: string;
+      [key: string]: unknown;
+    }
+  | {
+      event: "snippet";
+      chunk_id: string;
+      document_id: string;
+      document_name: string;
+      page_number: number;
+      text: string;
+      source: string;
+      score?: number;
+    }
   | { event: "retrieval"; chunk_count: number; bundle_count: number; refused: boolean; mode: string; diagnostics?: Record<string, unknown> }
   | { event: "content"; delta: string }
   | { event: "references"; references: ChatReference[]; refused?: boolean; suggestions?: string[] }

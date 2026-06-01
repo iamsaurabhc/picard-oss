@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -12,6 +14,7 @@ from app.services.fts_query_builder import build_fts_match_string
 from app.services.fts_search import FtsHit, fts_search, fts_search_on_pages
 from app.services.planned_retrieval import _early_page_thresholds, _fts_hit_to_search_hit
 from app.services.query_understanding import FtsPlan, QueryUnderstanding
+from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
 
 
 def _listing_anchor_fts(understanding: QueryUnderstanding, query: str) -> str:
@@ -87,15 +90,17 @@ def _apply_doc_quotas(
     return selected[:limit]
 
 
-def entity_listing_retrieve(
+def entity_listing_retrieve_with_progress(
     db: Session,
     understanding: QueryUnderstanding,
     *,
     workspace_id: str,
     document_ids: list[str] | None = None,
     query: str = "",
-) -> tuple[list[SearchHit], dict]:
-    """Entity-first retrieval: discover documents, then pool chunks per document."""
+    emitter: RetrievalProgressEmitter | None = None,
+) -> Iterator[dict]:
+    """Entity-first retrieval with progress events."""
+    progress = emitter or RetrievalProgressEmitter()
     target = understanding.target_entity
     canonicals = target.resolved_canonicals if target else []
     if not canonicals and understanding.constraints:
@@ -104,6 +109,8 @@ def entity_listing_retrieve(
                 canonicals = [c.canonical]
                 break
 
+    yield progress.progress("search", "start", strategy="entity_matter_listing")
+
     max_docs = settings.chat_listing_max_docs
     doc_rows = lookup_documents_for_party(
         db,
@@ -111,6 +118,13 @@ def entity_listing_retrieve(
         canonicals,
         document_ids,
         limit=max_docs,
+    )
+    yield progress.progress(
+        "search",
+        "done",
+        label="document_discovery",
+        documents_discovered=len(doc_rows),
+        target_entity=target.canonical if target else None,
     )
 
     anchor_fts = _listing_anchor_fts(understanding, query)
@@ -123,6 +137,7 @@ def entity_listing_retrieve(
     min_per_doc = settings.chat_listing_min_chunks_per_doc
 
     if not doc_rows and anchor_fts:
+        yield progress.progress("search", "start", label="fallback_fts")
         fallback = fts_search(
             db,
             query=query,
@@ -137,16 +152,31 @@ def entity_listing_retrieve(
             (doc_id, 1)
             for doc_id in {h.document_id for h in fallback}
         ]
+        best = progress.best_hit(fallback)
+        if best:
+            snippet = progress.snippet_from_hit(best, "fallback_fts")
+            if snippet:
+                yield snippet
+        yield progress.progress("search", "done", label="fallback_fts", hit_count=len(fallback))
 
     early_thresholds = _early_page_thresholds(db, [d for d, _ in doc_rows] if doc_rows else document_ids)
 
     for doc_id, mention_count in doc_rows:
+        doc_name = progress.doc_names.get(doc_id, doc_id)
+        yield progress.progress(
+            "search",
+            "start",
+            label="per_document",
+            document_id=doc_id,
+            document_name=doc_name,
+        )
         entity_pages = lookup_pages_for_party_in_document(
             db, workspace_id, doc_id, canonicals,
         )
         pages_per_doc[doc_id] = sorted(entity_pages)
 
         page_set = {(doc_id, p) for p in entity_pages}
+        doc_hits: list[FtsHit] = []
         if page_set and anchor_fts:
             hits = fts_search_on_pages(
                 db,
@@ -156,6 +186,7 @@ def entity_listing_retrieve(
                 top_k=chunks_per_doc,
             )
             _merge_pool(pool, hits)
+            doc_hits.extend(hits)
             per_doc_hits[doc_id] = len(hits)
 
         threshold = early_thresholds.get(doc_id, 3)
@@ -171,6 +202,21 @@ def entity_listing_retrieve(
                 top_k=2,
             )
             _merge_pool(pool, caption_hits)
+            doc_hits.extend(caption_hits)
+
+        best = progress.best_hit(doc_hits)
+        if best:
+            snippet = progress.snippet_from_hit(best, f"doc:{doc_name}")
+            if snippet:
+                yield snippet
+        yield progress.progress(
+            "search",
+            "done",
+            label="per_document",
+            document_id=doc_id,
+            document_name=doc_name,
+            hit_count=per_doc_hits.get(doc_id, 0),
+        )
 
     merged = sorted(pool.values(), key=lambda h: h.score)
     doc_order = [d for d, _ in doc_rows] if doc_rows else sorted({h.document_id for h in merged})
@@ -194,4 +240,26 @@ def entity_listing_retrieve(
         "diverse_size": len(diverse),
         "anchor_fts": anchor_fts,
     }
+    yield progress.progress("search", "done", pool_size=len(pool), hit_count=len(diverse))
     return [_fts_hit_to_search_hit(h) for h in diverse], diagnostics
+
+
+def entity_listing_retrieve(
+    db: Session,
+    understanding: QueryUnderstanding,
+    *,
+    workspace_id: str,
+    document_ids: list[str] | None = None,
+    query: str = "",
+) -> tuple[list[SearchHit], dict]:
+    """Entity-first retrieval: discover documents, then pool chunks per document."""
+    _events, result = consume_retrieval_generator(
+        entity_listing_retrieve_with_progress(
+            db,
+            understanding,
+            workspace_id=workspace_id,
+            document_ids=document_ids,
+            query=query,
+        )
+    )
+    return result

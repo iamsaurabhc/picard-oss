@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import ChatMessage, ChatSession, Document
 from app.db.session import utc_now_iso
-from app.schemas import ChatStreamRequest, SearchRequest
+from app.schemas import ChatStreamRequest, SearchHit, SearchRequest
 from app.services.citation_judge import judge_citations
 from app.services.citations import (
     build_citation_map,
@@ -21,10 +21,11 @@ from app.services.citations import (
 )
 from app.services.context_ranker import rank_context
 from app.services.model_router import ModelRole, stream_completion
-from app.services.entity_listing_retrieval import entity_listing_retrieve
-from app.services.overview_retrieval import overview_retrieve
-from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retrieve
+from app.services.entity_listing_retrieval import entity_listing_retrieve_with_progress
+from app.services.overview_retrieval import overview_retrieve_with_progress
+from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retrieve_with_progress
 from app.services.query_understanding import understand_query, understanding_summary
+from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
 from app.services.search import execute_search
 
 
@@ -83,12 +84,56 @@ def _use_carp(body: ChatStreamRequest, understanding) -> bool:
     )
 
 
+def get_document_names(db: Session, document_ids: list[str]) -> dict[str, str]:
+    if not document_ids:
+        return {}
+    rows = db.scalars(select(Document).where(Document.id.in_(document_ids))).all()
+    return {d.id: d.file_name for d in rows}
+
+
+def _workspace_doc_names(
+    db: Session,
+    workspace_id: str,
+    document_ids: list[str] | None,
+) -> dict[str, str]:
+    if document_ids:
+        return get_document_names(db, document_ids)
+    rows = db.scalars(select(Document).where(Document.workspace_id == workspace_id)).all()
+    return {d.id: d.file_name for d in rows}
+
+
+def _drain_retrieval_generator(gen: Iterator[dict]) -> tuple[list[dict], tuple[list[SearchHit], dict]]:
+    events, result = consume_retrieval_generator(gen)
+    return events, result
+
+
+def _emit_carp_snippets(
+    emitter: RetrievalProgressEmitter,
+    hits: list[SearchHit],
+    *,
+    source: str = "carp",
+) -> list[dict]:
+    events: list[dict] = []
+    for hit in hits:
+        snippet = emitter.snippet_from_hit(hit, source)
+        if not snippet:
+            break
+        events.append(snippet)
+    return events
+
+
 async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dict]:
     session = db.get(ChatSession, body.session_id)
     if not session:
         raise ValueError("Session not found")
 
     _persist_message(db, session_id=body.session_id, role="user", content=body.message)
+
+    emitter = RetrievalProgressEmitter(
+        doc_names=_workspace_doc_names(db, body.workspace_id, body.document_ids)
+    )
+
+    yield emitter.progress("understanding", "start")
 
     understanding = understand_query(
         body.message,
@@ -100,11 +145,21 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     is_overview = understanding.intent == "case_overview"
     is_listing = understanding.intent == "entity_matter_listing"
 
+    yield emitter.progress(
+        "understanding",
+        "done",
+        intent=understanding.intent,
+        mode=understanding.retrieval_mode,
+        pass_count=len(understanding.search_passes),
+        used_llm=understanding.used_llm,
+    )
+
     retrieval_diagnostics: dict = {"understanding": understanding_summary(understanding)}
     search_mode = "SIMPLE"
     bundles = None
     suggestions: list[str] = []
     refused = False
+    hits: list[SearchHit] = []
 
     if _use_carp(body, understanding):
         pool_k = body.top_k if body.top_k > settings.chat_top_k else settings.chat_retrieval_pool_k
@@ -115,6 +170,13 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             retrieval_mode=body.retrieval_mode,
             allow_partial_disclosure=body.allow_partial_disclosure,
             top_k=pool_k,
+        )
+        constraint_count = len(understanding.constraints)
+        yield emitter.progress(
+            "search",
+            "start",
+            strategy="carp",
+            constraint_count=constraint_count,
         )
         search_result = execute_search(
             db,
@@ -129,26 +191,45 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         refused = search_result.refused
         suggestions = search_result.suggestions or []
         retrieval_diagnostics.update(search_result.retrieval_diagnostics or {})
+        carp_diag = search_result.retrieval_diagnostics or {}
+        yield emitter.progress(
+            "search",
+            "done",
+            label="carp_intersection",
+            intersection_pages=carp_diag.get("intersection_pages"),
+            mode=search_mode,
+        )
+        for ev in _emit_carp_snippets(emitter, hits):
+            yield ev
+        yield emitter.progress("search", "done", strategy="carp", hit_count=len(hits))
     elif is_listing:
-        hits, listing_diag = entity_listing_retrieve(
+        gen = entity_listing_retrieve_with_progress(
             db,
             understanding,
             workspace_id=body.workspace_id,
             document_ids=body.document_ids,
             query=body.message,
+            emitter=emitter,
         )
+        progress_events, (hits, listing_diag) = _drain_retrieval_generator(gen)
+        for ev in progress_events:
+            yield ev
         retrieval_diagnostics.update(listing_diag)
         top_k = settings.chat_listing_top_k
         rank_mode = "listing"
         refused = len(hits) == 0
     elif is_overview:
-        hits, overview_diag = overview_retrieve(
+        gen = overview_retrieve_with_progress(
             db,
             understanding,
             workspace_id=body.workspace_id,
             document_ids=body.document_ids,
             query=body.message,
+            emitter=emitter,
         )
+        progress_events, (hits, overview_diag) = _drain_retrieval_generator(gen)
+        for ev in progress_events:
+            yield ev
         retrieval_diagnostics.update(overview_diag)
         top_k = settings.chat_overview_top_k
         rank_mode = "coverage"
@@ -163,19 +244,24 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             pass_top_k=max(pool_k // 2, 8),
             strategy="planned",
         )
-        hits, planned_diag = planned_retrieve(
+        gen = planned_retrieve_with_progress(
             db,
             understanding,
             workspace_id=body.workspace_id,
             document_ids=body.document_ids,
             query=body.message,
             config=config,
+            emitter=emitter,
         )
+        progress_events, (hits, planned_diag) = _drain_retrieval_generator(gen)
+        for ev in progress_events:
+            yield ev
         retrieval_diagnostics.update(planned_diag)
         top_k = settings.chat_top_k
         rank_mode = "precision"
         refused = len(hits) == 0
 
+    yield emitter.progress("rank", "start")
     ranked_hits, rank_diagnostics = rank_context(
         body.message,
         understanding,
@@ -193,6 +279,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         retrieval_diagnostics["documents_missing_from_context"] = [
             d for d in discovered if d not in in_ctx
         ]
+    yield emitter.progress("rank", "done", ranked_count=len(hits))
 
     retrieval_event = {
         "event": "retrieval",
@@ -235,6 +322,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     else:
         excerpt_chars = 400
     doc_names = get_document_names(db, list({h.document_id for h in hits}))
+    emitter.update_doc_names(doc_names)
     citation_map = build_citation_map(
         hits,
         bundles,
@@ -256,6 +344,8 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": body.message},
     ]
+
+    yield emitter.progress("generate", "start")
 
     full_answer = ""
     async for delta in stream_completion(messages=messages, role=ModelRole.LLM):
@@ -290,10 +380,3 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         },
     }
     yield {"event": "done"}
-
-
-def get_document_names(db: Session, document_ids: list[str]) -> dict[str, str]:
-    if not document_ids:
-        return {}
-    rows = db.scalars(select(Document).where(Document.id.in_(document_ids))).all()
-    return {d.id: d.file_name for d in rows}

@@ -8,6 +8,23 @@ from app.db.session import utc_now_iso
 from tests.corpus_constants import WORKSPACE_ID
 
 
+def _parse_sse_events(response) -> list[dict]:
+    events: list[dict] = []
+    event_type = "message"
+    for raw_line in response.iter_lines():
+        if isinstance(raw_line, bytes):
+            line = raw_line.decode()
+        else:
+            line = raw_line
+        if line.startswith("event:"):
+            event_type = line[6:].strip()
+        elif line.startswith("data:"):
+            payload = json.loads(line[5:].strip())
+            events.append({"event": event_type, **payload})
+            event_type = "message"
+    return events
+
+
 @pytest.fixture()
 def chat_session(client, db_session):
     from app.db.models import Workspace
@@ -85,5 +102,52 @@ def test_chat_stream_mock_llm(client, chat_session, monkeypatch):
         },
     ) as response:
         assert response.status_code == 200
-        content = "".join(response.iter_lines())
-        assert "retrieval" in content or "content" in content
+        events = _parse_sse_events(response)
+        event_types = [e["event"] for e in events]
+        assert event_types[0] == "progress"
+        assert events[0]["phase"] == "understanding"
+        assert events[0]["status"] == "start"
+        assert "retrieval" in event_types
+        assert "content" in event_types
+        progress_before_retrieval = event_types.index("retrieval") > event_types.index(
+            next(e for e in event_types if e == "progress")
+        )
+        assert progress_before_retrieval
+
+
+@pytest.mark.corpus
+def test_chat_stream_progress_snippets(corpus_client, monkeypatch):
+    async def fake_stream(*args, **kwargs):
+        yield "Answer [1]."
+
+    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
+    monkeypatch.setattr(settings, "enable_context_ranker", False)
+
+    session_r = corpus_client.post("/chat/sessions", json={"workspace_id": WORKSPACE_ID})
+    session_id = session_r.json()["id"]
+
+    with corpus_client.stream(
+        "POST",
+        "/chat/stream",
+        json={
+            "session_id": session_id,
+            "workspace_id": WORKSPACE_ID,
+            "message": "liability",
+            "retrieval_mode": "simple",
+        },
+    ) as response:
+        assert response.status_code == 200
+        events = _parse_sse_events(response)
+
+    assert events[0]["event"] == "progress"
+    assert events[0]["phase"] == "understanding"
+    retrieval_idx = next(i for i, e in enumerate(events) if e["event"] == "retrieval")
+    assert any(e["event"] == "progress" for e in events[:retrieval_idx])
+
+    snippets = [e for e in events if e["event"] == "snippet"]
+    assert snippets, "expected at least one snippet event on corpus liability query"
+    first = snippets[0]
+    assert first["text"]
+    assert first["document_name"]
+    assert first["page_number"] >= 1

@@ -20,16 +20,23 @@ This document is the authoritative blueprint for **picard-oss**: an open-source,
 3. [Design decisions & rationale](#3-design-decisions--rationale)
 4. [Technology stack](#4-technology-stack)
    - [4.1 Tiered model routing (optional SLM orchestration)](#41-tiered-model-routing-optional-slm-orchestration)
+   - [4.2 Tool integration stack (post-v1)](#42-tool-integration-stack-post-v1)
 5. [System architecture](#5-system-architecture)
 6. [Data model (SQLite)](#6-data-model-sqlite)
+   - [6.3 Post-v1 tables (workflows, drafts, CSV, web snapshots)](#63-post-v1-tables-workflows-drafts-csv-web-snapshots)
 7. [Evidence contract (adapted from Picard.law)](#7-evidence-contract-adapted-from-picardlaw)
+   - [7.4 Multi-tier evidence (post-v1)](#74-multi-tier-evidence-post-v1)
+   - [7.5 Per-step refuse in agent loop (post-v1)](#75-per-step-refuse-in-agent-loop-post-v1)
 8. [Ingestion pipeline](#8-ingestion-pipeline)
    - [8.3 Entity extraction at ingest (CARP foundation)](#83-entity-extraction-at-ingest-carp-foundation)
    - [8.3.4 Entity extraction evolution (EX-1–EX-5)](#834-entity-extraction-evolution-ex-1ex-5)
+   - [8.6 CSV & structured data ingest (Phase 8)](#86-csv--structured-data-ingest-phase-8)
 9. [Relevance engine (FTS5)](#9-relevance-engine-fts5)
   - [9.5 Multi-constraint contextual retrieval (CARP)](#95-multi-constraint-contextual-retrieval-carp)
 10. [Citation-grade chat](#10-citation-grade-chat)
+   - [10.5 Evidence-tiered agent mode (Phase 7+)](#105-evidence-tiered-agent-mode-phase-7)
 11. [Structured tabular review (adapted from Mike)](#11-structured-tabular-review-adapted-from-mike)
+   - [11.5 Workflow library (Phase 6+)](#115-workflow-library-phase-6)
 12. [Frontend architecture](#12-frontend-architecture)
 13. [API surface](#13-api-surface)
 14. [Development plan (phased)](#14-development-plan-phased)
@@ -53,6 +60,9 @@ Legal professionals need AI assistance that:
 2. Returns **verifiable** answers with page-level citations
 3. Supports **bulk structured review** (tabular extraction across many contracts)
 4. Starts quickly without Neo4j clusters, Celery workers, or cloud OCR bills
+5. *(Post-v1)* Runs **evidence-aware playbooks** — dynamic workflows bound to CARP query intents, not generic chat
+6. *(Post-v1)* Drafts documents from **templates + tabular/CSV data + corpus evidence** with section-level provenance
+7. *(Post-v1)* Optionally fetches **user-supplied URLs** (cached snapshots) without breaking the local citation contract
 
 ### Position in the ecosystem
 
@@ -91,6 +101,19 @@ Legal professionals need AI assistance that:
 | Single-command startup         | One script boots backend + frontend                                                         |
 
 
+### Post-v1 success criteria (Phases 6–9)
+
+| Criterion | Measure | Phase |
+| --------- | ------- | ----- |
+| Workflow intent routing | Selecting a playbook triggers correct CARP/FTS5 intent (WF-01) | 6 |
+| Agent citation integrity | Multi-step agent answers: 100% corpus claims use valid `[N]` (AG-01) | 7 |
+| Per-step refuse | Empty retrieval tool call → `step_refused`, no hallucinated filler (AG-02) | 7 |
+| CSV provenance | Row/column citation resolves to ingested CSV cell (CSV-01) | 8 |
+| Template draft gaps | Unfilled placeholders listed explicitly; ≥90% evidence-backed slots filled (DR-01) | 8 |
+| External tier separation | Web claims use `[ext:N]` only; never bbox `[N]` (WEB-01) | 9 |
+| Air-gap default | With `ENABLE_WEB_RESEARCH=false`, zero outbound HTTP during chat (WEB-02) | 9 |
+
+
 ---
 
 ## 2. Core philosophy & differentiators
@@ -102,6 +125,8 @@ All documents, parsed chunks, metadata, chat history, and tabular results live u
 **Why:** Legal documents are privileged. Firms evaluating OSS need a credible "documents never leave this machine" story without standing up Supabase, R2, or Neo4j Aura.
 
 **What we skip from LegalDocX/Mike:** Supabase Auth/Storage, Cloudflare R2, Azure Container Apps, Redis pub/sub (v1 uses in-process or SQLite-backed job state).
+
+**Post-v1 external access (Phase 9):** Optional URL fetch stores **cached text snapshots** under `~/.picard-data/snapshots/` — not live browsing, not search discovery, not document egress. Disabled by default (`ENABLE_WEB_RESEARCH=false`) for air-gap deployments.
 
 ### 2.2 Relevance over similarity (FTS5, not vectors)
 
@@ -157,8 +182,14 @@ Shadcn UI + Tailwind, restrained gray palette, serif accents for headings (inspi
 | Auth (v1)         | None (single-user local)                   | Reduces scope; local machine = trust boundary          | Supabase JWT (Mike/LegalDocX)                             |
 | LLM routing       | litellm + optional tiered roles            | One interface; SLM/LLM split when configured           | Hard-coded OpenAI SDK; mandatory OpenRouter              |
 | Tabular UI        | Custom table + Shadcn (Mike-inspired)      | Full control, monotone styling                         | Ag-Grid (heavier, license considerations)                 |
-| DOCX support      | PDF-only v1                                | Simpler viewer pipeline                                | Mike's DOCX + tracked changes (Phase 3+)                  |
-| Workflows library | Deferred post-v1 | Tabular presets cover 80% of v1 tabular need | Mike's 1200-line builtinWorkflows.ts day one |
+| DOCX support      | PDF-only v1; markdown drafts Phase 8       | Simpler viewer pipeline                                | Mike's DOCX + tracked changes (post-v1)                  |
+| Workflows library | Phase 6 — evidence-aware local playbooks   | Binds to CARP intents; ~20 built-ins, not 1200-line clone | Mike's builtinWorkflows.ts day one |
+| Agent orchestration | Custom litellm loop + Pydantic schemas (Phase 7) | Zero framework RAM; refuse gate per tool call | LangGraph, Pydantic AI, smolagents |
+| Structured extraction | Pydantic + litellm JSON; Instructor optional | Already Pydantic-native FastAPI stack | LangChain `.with_structured_output()` |
+| CSV ingest        | stdlib `csv` → SQLite (Phase 8)            | No dataframe memory spike                              | pandas, polars |
+| Templates         | Jinja2 sandbox (Phase 8)                   | Local file templates with provenance-bound fill        | Mike free-form `generate_docx` |
+| Web research      | httpx + trafilatura; URL-only (Phase 9)    | User-controlled egress; cached snapshots               | duckduckgo-search, Playwright, Crawl4AI |
+| Composite workflows | SQLite-backed Python step runner (Phase 8) | Reuses existing job patterns                           | Burr, Temporal, llm-nano-vm |
 | Multi-constraint retrieval | CARP (entity index + page intersection) | Party+date+condition at 100K pages without Neo4j | Full GraphRAG (LegalDocX) |
 | Entity extraction | Hybrid rules → doc-type routing → NER (EX-1–EX-5) | CARP needs auditable spans + canonicals; regex alone misses parties/IDs on real corpora | Pure regex (v1 baseline); per-chunk LLM at ingest scale |
 
@@ -236,6 +267,8 @@ flowchart LR
 | **Citation judge** (§7, post-synthesis) | Partial — FactVerifier lite is regex | **High** | **P2** | LegalDocX layer 5; cheap validation pass catches wrong `[N]` assignments |
 | Tabular column prompt gen | Templates cover presets | Medium | P3 | SLM fine for expanding column labels to prompts |
 | Tabular cell extraction | FTS5 + JSON schema often enough | Medium | P3 | Complex legal columns may need capable LLM; simple yes/no/date → SLM |
+| Agent tool loop (post-v1) | Per-step refuse + citation map deterministic | Capable LLM for tool selection | P2 | Phase 7 — extends synthesis path; see §4.2 |
+| Dynamic workflow generation | No | **High** | P3 | Phase 7 stretch — SLM drafts WorkflowStep[] from workspace inventory |
 
 **Bottom line:** The highest-ROI SLM insertion points are **before retrieval** (ConstraintQueryPlanner, query expansion) and **after synthesis** (citation judge). The CARP core (intersection, refuse gate, citation map) should stay deterministic.
 
@@ -360,6 +393,132 @@ SLM savings are modest per query but compound at volume. The bigger win is **lat
 
 ---
 
+### 4.2 Tool integration stack (post-v1)
+
+Phases 6–9 add agentic workflows without heavyweight agent frameworks. Picard's dominant RAM cost is already **GLiNER/torch** at ingest (§8.3); agent tooling must add negligible process overhead.
+
+**Selected orchestration:** custom **litellm tool loop** (~100 lines) in `backend/app/services/agent_loop.py`, extending [`model_router.py`](backend/app/services/model_router.py) with `acompletion(tools=..., stream=True)`. Tool argument schemas are **Pydantic models** → OpenAI function JSON via `model_json_schema()`. No LangGraph, LangChain, CrewAI, or smolagents.
+
+**Reference:** Mike implements the same pattern in [`mike/backend/src/lib/chatTools.ts`](../mike/backend/src/lib/chatTools.ts) — single LLM, up to 10 tool iterations, SSE event array persistence. Picard caps at **5 iterations** (configurable) for local Ollama budgets and applies **per-step refuse gates** Mike does not have.
+
+#### 4.2.1 Modular stack by layer
+
+```mermaid
+flowchart TB
+  subgraph core [Core — already installed]
+    Litellm[litellm tool calling]
+    Pydantic[Pydantic tool arg schemas]
+    SQLite[SQLite workflow_runs + jobs]
+    Httpx[httpx async fetch]
+  end
+  subgraph phase_additions [Small additions by phase]
+    Jinja[jinja2 — Phase 8 templates]
+    Trafilatura[trafilatura — Phase 9 URL extract]
+    Instructor[instructor — optional Phase 4/8 structured JSON]
+  end
+  AgentLoop[agent_loop.py] --> Litellm
+  ToolRegistry[tools/registry.py] --> AgentLoop
+  AgentLoop --> SQLite
+```
+
+| Layer | Phase | Technology | New dependency? |
+| ----- | ----- | ---------- | --------------- |
+| Agent loop | 7 | Custom litellm loop + Pydantic-validated tool args | No |
+| Tool registry | 7 | `backend/app/tools/` — one module per domain; tier-gated registration | No |
+| Structured extraction | 4, 8 | litellm `response_format` + Pydantic parse (see `query_understanding.py`) | No |
+| Structured extraction retry | 4, 8 | **Instructor** on litellm — only if schema retry needed | Optional |
+| CSV ingest | 8 | stdlib `csv` → SQLite rows | No |
+| Templates | 8 | **Jinja2** sandbox in `~/.picard-data/templates/` | Yes (small) |
+| URL fetch | 9 | **httpx** + **trafilatura**; lazy-import when flag on | trafilatura only |
+| Composite workflows | 8 | `workflow_runner.py` — plain Python step executor + SQLite persistence | No |
+| External extensibility | 10+ | MCP stdio server (§16) | Deferred |
+
+#### 4.2.2 Agent loop pattern (Phase 7)
+
+```python
+# Conceptual — backend/app/services/agent_loop.py
+for step in range(settings.agent_max_iterations):  # default 5
+    response = await litellm.acompletion(model=..., messages=..., tools=active_tools)
+    if not response.tool_calls:
+        yield final_content
+        break
+    for call in response.tool_calls:
+        args = ToolArgsModel.model_validate_json(call.function.arguments)
+        result = await tool_registry.execute(call.function.name, args, ctx)
+        if result.refused:
+            yield StepRefusedEvent(step=step, tool=call.function.name)
+            continue
+        messages.append(tool_result_message(call.id, result))
+```
+
+- **Tool registry:** `backend/app/tools/registry.py` registers tools by evidence tier; optional deps lazy-imported (trafilatura only when `ENABLE_WEB_RESEARCH=true`)
+- **Streaming:** extend §10.1 SSE events; reuse `sse-starlette`
+- **Persistence:** assistant messages as JSON event arrays (Mike pattern); composite state in `workflow_runs.steps_json`
+
+#### 4.2.3 Structured extraction (tabular + drafts)
+
+| Use case | Approach |
+| -------- | -------- |
+| Tabular cell JSON (`summary`, `reasoning`, `chunk_ids`) | litellm JSON mode + Pydantic parse (§11.2) |
+| Schema retry on failure | Optional `instructor[litellm]` behind `ENABLE_INSTRUCTOR` |
+| Template placeholder bindings | Pydantic `DraftBindings` model (Phase 8) |
+
+**Avoid pandas/polars** for CSV — stdlib `csv` → SQLite. Sufficient for legal data sheets (typically &lt;50k rows); keeps memory flat.
+
+#### 4.2.4 Web fetch (Phase 9, URL-only)
+
+| Component | Choice |
+| --------- | ------ |
+| HTTP | httpx (already installed) |
+| HTML → text | trafilatura (lazy-imported) |
+| Search / discovery | **None** — user or workflow supplies URLs explicitly |
+| JS-rendered sites | Deferred (Playwright/Crawl4AI too heavy for default) |
+| Storage | `research_snapshots` table + `~/.picard-data/snapshots/` files |
+
+When `ENABLE_WEB_RESEARCH=false`, the `web_fetch` tool is **not registered** — zero outbound HTTP.
+
+#### 4.2.5 Composite workflow runner (Phase 8)
+
+Not a framework — plain Python executor in `backend/app/services/workflow_runner.py`:
+
+```python
+async def run_composite_workflow(workflow: PicardWorkflow, ctx: RunContext):
+    for step in workflow.steps:
+        result = await STEP_HANDLERS[step.kind](step.config, ctx)
+        if step.refuse_on_empty and result.is_empty:
+            ctx.mark_refused(step.id)
+            continue
+        ctx.record(step.id, result)
+    return ctx.build_draft_or_answer()
+```
+
+State persisted to `workflow_runs.steps_json`. Agent loop can invoke composite workflows via `run_workflow(workflow_id)` tool.
+
+#### 4.2.6 SLM routing for agent steps (extends §4.1)
+
+| Pipeline step | Rules/SQL sufficient? | SLM adds value? | Phase |
+|---------------|----------------------|-----------------|-------|
+| Agent tool selection | No — needs capable LLM | N/A | 7 |
+| Dynamic workflow generation | No | **High** — SLM drafts `WorkflowStep[]` from user requirement + workspace inventory | 7 stretch |
+| `search_corpus` / CARP inside tools | **Yes** — deterministic | None | 7 |
+| Per-step refuse gate | **Yes** | None | 7 |
+| Tabular cell extraction (tool) | Partial | Medium | 7 |
+| Template section fill | No | Capable LLM with fixed bindings | 8 |
+
+#### 4.2.7 Explicitly rejected
+
+| Option | Why rejected |
+| ------ | ------------ |
+| LangGraph / LangChain / CrewAI | Heavy deps + checkpoint RAM alongside torch/GLiNER |
+| Pydantic AI | Extra abstraction over custom litellm loop |
+| smolagents | Code-execution agents — security risk for legal docs |
+| Burr / Temporal / llm-nano-vm | SQLite job + workflow_runs tables sufficient |
+| Playwright / Crawl4AI (default) | Browser RAM; document as Phase 9 limitation |
+| pandas / polars (default CSV) | Unnecessary memory for typical legal CSVs |
+| duckduckgo-search / search APIs | User decision: URL-only fetch (Phase 9) |
+
+---
+
 ## 5. System architecture
 
 ### 5.1 High-level topology
@@ -369,6 +528,8 @@ SLM savings are modest per query but compound at volume. The bigger win is **lat
 │  frontend/  Next.js                                                       │
 │  ├── Workspaces & document upload                                         │
 │  ├── Assistant (50/50 chat + MultiHighlightPDFViewer)                   │
+│  ├── Workflows library (Phase 6) + workflow picker in ChatInput          │
+│  ├── Draft viewer with section provenance (Phase 8)                       │
 │  ├── Tabular Review (TRTable, TRSidePanel, TRChatPanel)                  │
 │  └── Shared: DocPanel, citation pills, PreResponseWrapper               │
 └───────────────────────────────┬──────────────────────────────────────────┘
@@ -379,18 +540,23 @@ SLM savings are modest per query but compound at volume. The bigger win is **lat
 │  ├── /documents   upload, list, serve PDF bytes                           │
 │  ├── /parse       trigger liteparse, store chunks                         │
 │  ├── /search      FTS5 query + query expansion                            │
-│  ├── /chat        streaming Q&A with citation pipeline                    │
+│  ├── /chat        streaming Q&A; agent mode when ENABLE_AGENT_MODE (Ph 7)│
+│  ├── /workflows   CRUD, hide, built-ins (Phase 6)                         │
+│  ├── /drafts      template drafts + provenance (Phase 8)                  │
+│  ├── /data/csv    CSV ingest + row queries (Phase 8)                      │
 │  ├── /tabular     column CRUD, batch extraction, regenerate cell          │
 │  └── /workspaces  workspace + metadata management                         │
+│  Services: agent_loop.py, tools/registry.py, workflow_runner.py (post-v1)│
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 │
-          ┌─────────────────────┼─────────────────────┐
-          ▼                     ▼                     ▼
-   ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-   │  SQLite     │      │  FTS5       │      │  ~/.picard- │
-   │  metadata   │      │  virtual    │      │  data/pdfs/ │
-   │  + jobs     │      │  table      │      │  local PDFs │
-   └─────────────┘      └─────────────┘      └─────────────┘
+          ┌─────────────────────┼─────────────────────┬─────────────────┐
+          ▼                     ▼                     ▼                 ▼
+   ┌─────────────┐      ┌─────────────┐      ┌─────────────┐   ┌──────────────┐
+   │  SQLite     │      │  FTS5       │      │  ~/.picard- │   │ ~/.picard-   │
+   │  metadata   │      │  virtual    │      │  data/pdfs/ │   │ data/templates│
+   │  + jobs     │      │  table      │      │  local PDFs │   │ + snapshots/ │
+   │  + workflows│      │             │      │             │   │ (Phase 8–9)  │
+   └─────────────┘      └─────────────┘      └─────────────┘   └──────────────┘
 ```
 
 ### 5.2 Request flow: chat with citations
@@ -420,6 +586,42 @@ sequenceDiagram
 
 
 
+### 5.2.1 Request flow: agent mode (Phase 7+, when `ENABLE_AGENT_MODE=true`)
+
+Extends §5.2 with a bounded litellm tool loop. Each retrieval tool call runs the same refuse gate + citation map as single-shot chat (§7).
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant FE as Next.js
+  participant API as FastAPI
+  participant Agent as agent_loop
+  participant Tools as tool_registry
+  participant LLM as litellm
+
+  U->>FE: Message + optional workflow
+  FE->>API: POST /chat/stream (agent mode)
+  loop max 5 iterations
+    API->>LLM: acompletion with tools
+    alt No tool_calls
+      LLM-->>API: Final content
+      API-->>FE: SSE content + references
+    else tool_calls
+      API->>Tools: Execute search_corpus / read_workflow / ...
+      alt Empty retrieval
+        Tools-->>API: refused=true
+        API-->>FE: SSE step_refused
+      else Has evidence
+        Tools-->>API: Citation-mapped chunks / tabular rows
+        API->>LLM: Append tool results
+      end
+    end
+  end
+  FE->>FE: PreResponseWrapper step count + pills
+```
+
+Single-shot chat (Phase 3) remains the default when `ENABLE_AGENT_MODE=false`.
+
 ### 5.3 Directory layout (target)
 
 ```
@@ -428,10 +630,12 @@ picard-oss/
 │   ├── app/
 │   │   ├── workspaces/
 │   │   ├── assistant/
+│   │   ├── workflows/      Phase 6 — library UI
+│   │   ├── drafts/         Phase 8 — provenance viewer
 │   │   └── tabular/
 │   └── components/
 │       ├── pdf/          MultiHighlightPDFViewer
-│       ├── chat/         CitationParser, ChatPanel
+│       ├── chat/         CitationParser, ChatPanel, workflow picker
 │       └── tabular/      TRTable, TRSidePanel (Mike-inspired)
 ├── backend/
 │   ├── app/
@@ -441,7 +645,11 @@ picard-oss/
 │   │   │   ├── ingestion.py
 │   │   │   ├── search.py
 │   │   │   ├── citations.py
-│   │   │   └── tabular.py
+│   │   │   ├── tabular.py
+│   │   │   ├── agent_loop.py      Phase 7
+│   │   │   └── workflow_runner.py Phase 8
+│   │   ├── tools/        Phase 7 — registry + tier modules
+│   │   └── workflows/  Phase 6 — builtins.py
 │   │   └── routers/
 │   └── requirements.txt
 ├── scripts/
@@ -586,7 +794,7 @@ CREATE TABLE tabular_cells (
 -- Background jobs (replaces Redis/Celery for v1)
 CREATE TABLE jobs (
   id TEXT PRIMARY KEY,
-  job_type TEXT NOT NULL,       -- parse | entity_extract | tabular_batch | metadata_extract
+  job_type TEXT NOT NULL,       -- parse | entity_extract | tabular_batch | metadata_extract | csv_ingest | workflow_run
   payload_json TEXT NOT NULL,
   status TEXT DEFAULT 'pending',
   progress REAL DEFAULT 0,
@@ -614,6 +822,100 @@ CREATE TABLE jobs (
 
 
 **FTS5 sync:** SQLAlchemy event listeners or explicit triggers keep `chunks_fts` in sync on chunk insert/update/delete.
+
+### 6.3 Post-v1 tables (workflows, drafts, CSV, web snapshots)
+
+Added in Phases 6–9. All local SQLite — no cloud sharing tables.
+
+```sql
+-- Workflow library (Phase 6)
+CREATE TABLE workflows (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,              -- NULL = global built-in
+  type TEXT NOT NULL,             -- assistant | tabular | composite
+  title TEXT NOT NULL,
+  practice_area TEXT,
+  prompt_md TEXT,
+  columns_config_json TEXT,       -- tabular seed
+  steps_json TEXT,                -- composite WorkflowStep[]
+  evidence_profile_json TEXT NOT NULL,  -- requires_corpus, allowed_intents, allows_*
+  is_builtin INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE hidden_workflows (
+  workflow_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (workflow_id)
+);
+
+CREATE TABLE workflow_runs (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES workflows(id),
+  workspace_id TEXT NOT NULL,
+  session_id TEXT,                -- optional link to chat session
+  status TEXT DEFAULT 'running', -- running | done | refused | error
+  steps_json TEXT,                -- per-step results + refuse markers
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- CSV / structured data (Phase 8)
+CREATE TABLE workspace_data_files (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  file_name TEXT NOT NULL,
+  local_path TEXT NOT NULL,
+  row_count INTEGER,
+  columns_json TEXT NOT NULL,     -- column names + types
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE workspace_data_rows (
+  id TEXT PRIMARY KEY,
+  file_id TEXT NOT NULL REFERENCES workspace_data_files(id),
+  row_index INTEGER NOT NULL,
+  cells_json TEXT NOT NULL,       -- {col_name: value}
+  UNIQUE(file_id, row_index)
+);
+
+-- Template drafts (Phase 8)
+CREATE TABLE draft_documents (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  template_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content_md TEXT NOT NULL,
+  sources_json TEXT NOT NULL,     -- per-section provenance + missing_evidence[]
+  workflow_run_id TEXT,
+  created_at TEXT NOT NULL
+);
+
+-- URL fetch snapshots (Phase 9)
+CREATE TABLE research_snapshots (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  url_hash TEXT NOT NULL,         -- dedup key
+  fetched_at TEXT NOT NULL,
+  text_path TEXT NOT NULL,        -- under ~/.picard-data/snapshots/
+  byte_size INTEGER,
+  UNIQUE(workspace_id, url_hash)
+);
+```
+
+**Indexing (post-v1):**
+
+| Index | Purpose |
+| ----- | ------- |
+| `workflows(workspace_id, type)` | Library filter |
+| `workflow_runs(workflow_id, status)` | Run history |
+| `workspace_data_rows(file_id, row_index)` | Row lookup for `[csv:row:col]` |
+| `research_snapshots(workspace_id, url_hash)` | Snapshot dedup |
+
+**Picard-unique join (Phase 8):** CSV party columns matched to `page_entities` via CARP canonical resolution in `csv_entity_join.py` — cross-source workflows Mike cannot do.
 
 ---
 
@@ -683,6 +985,55 @@ interface ChatResponse {
   };
 }
 ```
+
+### 7.4 Multi-tier evidence (post-v1)
+
+Phases 7–9 extend the three-layer pipeline with **evidence tiers**. Each tier has its own citation namespace — never silently blended.
+
+```mermaid
+flowchart LR
+  subgraph tierA [Tier A — Corpus]
+    CARP[CARP / FTS5]
+    Bbox["bbox citations N"]
+  end
+  subgraph tierB [Tier B — Structured workspace]
+    Tabular[tabular_cells]
+    CSV[csv_rows]
+    StructRef["T:N or csv:row:col"]
+  end
+  subgraph tierC [Tier C — External opt-in]
+    Web[web_fetch snapshot]
+    ExtRef["ext:N URL plus fetched_at"]
+  end
+  subgraph tierD [Tier D — Draft output]
+    Template[template fill]
+    DraftRef["section source map plus gaps"]
+  end
+  Agent[Bounded tool loop] --> tierA
+  Agent --> tierB
+  Agent --> tierC
+  Agent --> tierD
+```
+
+| Tier | Source | Citation form | Rules |
+| ---- | ------ | ------------- | ----- |
+| **A** | PDF corpus via CARP/FTS5 | `[N]` → chunk + bbox | Pre-assigned citation map (Layer 1); no free-form full-doc reads |
+| **B** | Tabular cells, CSV rows | `[T:N]`, `[csv:file:row:col]` | Never substitutes for Tier A on legal-fact claims about PDF content |
+| **C** | User-supplied URL snapshots | `[ext:N]` → URL + `fetched_at` | Disabled unless `ENABLE_WEB_RESEARCH=true`; distinct UI styling |
+| **D** | Template-filled drafts | Section `sources[]` + `missing_evidence[]` | Outputs carry `draft: true`; not final legal documents |
+
+### 7.5 Per-step refuse in agent loop (post-v1)
+
+Phase 3 refuse gate (Layer 2) applies at **conversation start** for single-shot chat. Phase 7 agent mode applies the same logic **inside each retrieval tool call**:
+
+1. Tool `search_corpus` runs CARP/FTS5/intent routing (§9.5.9)
+2. If zero evidence → return `{ refused: true }` to the agent loop; emit SSE `step_refused`
+3. LLM may continue with other tools or summarize the refusal — it must **not** invent corpus facts for that step
+4. Synthesis steps that follow a refused retrieval must not cite chunks from that failed call
+
+**Why per-step refuse:** Mike's tool loop re-reads documents every turn without a refuse gate per call. Picard's agent can multi-step (retrieve → compare tabular → summarize) while keeping each corpus claim anchored to a valid citation map.
+
+**Max tool iterations:** 5 (default, `AGENT_MAX_ITERATIONS`) — lower than Mike's 10 for local Ollama latency budgets.
 
 ---
 
@@ -846,6 +1197,19 @@ backend/app/services/entity_extraction/
 Poll `GET /documents/{id}/status` → `{ parse_status, progress }`.
 
 **Why not WebSockets in v1:** Mike and LegalDocX use SSE/WebSocket for multi-user cloud scale. Single-user local polling every 1s is sufficient; WebSocket in Phase 5 polish.
+
+### 8.6 CSV & structured data ingest (Phase 8)
+
+When `ENABLE_CSV_INGEST=true`:
+
+1. User uploads CSV via multipart form (XLSX deferred post-v1)
+2. Parse with stdlib `csv` — **no pandas/polars** (§4.2)
+3. Insert `workspace_data_files` + `workspace_data_rows` with row-indexed `cells_json`
+4. Column metadata stored for citation refs: `[csv:{file_id}:row:{index}:col:{name}]`
+
+**Entity join:** `csv_entity_join.py` matches party/org columns to `entities.canonical_value` via the same normalizers as CARP — enables composite workflows that combine CSV rows with PDF corpus retrieval.
+
+**Job type:** `csv_ingest` in `jobs` table (BackgroundTasks).
 
 ---
 
@@ -1247,18 +1611,25 @@ For queries like *"list all cases against Google LLC"* across many PDFs in a wor
 
 `POST /chat/stream` — Server-Sent Events
 
-Events (Mike-inspired rich types, simplified):
+Events (Mike-inspired rich types; Phase 3 baseline + Phase 7 agent extensions):
 
 
-| Event        | Payload                                  |
-| ------------ | ---------------------------------------- |
-| `retrieval`  | `{ chunk_count, bundle_count, refused, mode, diagnostics }` |
-| `reasoning`  | `{ text }` (optional, if model supports) |
-| `content`    | `{ delta }`                              |
-| `references` | `{ references[], citation_validation }`  |
-| `done`       | `{}`                                     |
+| Event | Phase | Payload |
+| ----- | ----- | ------- |
+| `retrieval` | 3 | `{ chunk_count, bundle_count, refused, mode, diagnostics }` |
+| `reasoning` | 3 | `{ text }` (optional, if model supports) |
+| `content` | 3 | `{ delta }` |
+| `references` | 3 | `{ references[], citation_validation }` |
+| `done` | 3 | `{}` |
+| `tool_call_start` | 7 | `{ name, args_preview }` |
+| `workflow_applied` | 6–7 | `{ workflow_id, title }` |
+| `step_refused` | 7 | `{ tool, step, diagnostics }` |
+| `tabular_read` | 7 | `{ review_id, cell_count }` |
+| `draft_section` | 8 | `{ section_id, sources[], missing_evidence[] }` |
+| `ext_reference` | 9 | `{ index, url, fetched_at, preview }` |
 
 
+**Mike reference:** [`useAssistantChat.ts`](../mike/frontend/src/app/hooks/useAssistantChat.ts) parses `AssistantEvent` types (`doc_read`, `workflow_applied`, `tool_call_start`, etc.) and persists assistant turns as JSON event arrays in `chat_messages`. Picard adopts event-array persistence in Phase 7 but **replaces** Mike's unconstrained `read_document` with citation-mapped `search_corpus` (§7.4 Tier A).
 ### 10.2 System prompt (core)
 
 ```
@@ -1292,6 +1663,38 @@ Sources:
 2. Frontend looks up `references[2]`
 3. PDF viewer navigates to `page`, draws monotone border on `bbox`
 4. If different document → swap DocPanel tab (preserve other tabs)
+
+### 10.5 Evidence-tiered agent mode (Phase 7+)
+
+When `ENABLE_AGENT_MODE=true`, `POST /chat/stream` runs the custom litellm tool loop (§4.2) instead of single-shot retrieve→synthesize. Phase 3 single-shot remains available when the flag is off.
+
+**Mike reference architecture:** [`chatTools.ts`](../mike/backend/src/lib/chatTools.ts) — `runLLMStream()` with up to 10 iterations, `buildWorkflowStore()`, workflow marker prefix on user messages. Picard differences:
+
+| Mike pattern | Picard adaptation |
+| ------------ | ----------------- |
+| `read_workflow` tool | Same; workflow includes `evidence_profile` + CARP intent bindings (§11.5) |
+| `read_document` every turn | **Rejected** → `search_corpus` returns citation-mapped chunks only |
+| `generate_docx` | **Rejected** → `draft_from_template` with section provenance (Phase 8) |
+| 10 max iterations | 5 default (`AGENT_MAX_ITERATIONS`) |
+| No per-tool refuse gate | `step_refused` on empty retrieval (§7.5) |
+
+**Registered tools (Phase 7 baseline):**
+
+| Tool | Tier | Purpose |
+| ---- | ---- | ------- |
+| `search_corpus` | A | Routes to CARP/FTS5/query intents; builds citation map |
+| `read_chunks` | A | Fetch chunk text by `chunk_id` from current map |
+| `read_tabular_cells` | B | Read cells from a tabular review |
+| `list_tabular_reviews` | B | List reviews in workspace |
+| `list_workflows` | — | Discover playbooks |
+| `read_workflow` | — | Load workflow `prompt_md` / steps |
+| `run_workflow` | — | Execute composite workflow (Phase 8) |
+| `draft_from_template` | D | Fill template sections (Phase 8) |
+| `web_fetch` | C | User-supplied URL only (Phase 9) |
+
+Workflow attachment (Mike pattern): user selects playbook in `ChatInput` → message prefixed with `[Workflow: {title} (id: {id})]` → system prompt instructs immediate `read_workflow` call ([`ChatInput.tsx`](../mike/frontend/src/app/components/assistant/ChatInput.tsx)).
+
+**Dynamic workflows (Phase 7 stretch):** SLM generates `WorkflowStep[]` from user requirement + workspace inventory (doc count, tabular reviews, CSV files) → user approves in UI → saved to local SQLite. Mike workflows are static prompts only.
 
 ---
 
@@ -1352,7 +1755,54 @@ For each (document × column):
 
 ### 11.4 Tabular chat (Phase 4)
 
-Dedicated chat panel inside review (`TRChatPanel`) with citations that scroll to table cells — adopt Mike's `TRCitationAnnotation` pattern in Phase 4.
+Dedicated chat panel inside review (`TRChatPanel`) with citations that scroll to table cells — adopt Mike's `TRCitationAnnotation` pattern in Phase 4. Enhanced in Phase 7 with agent tools (`read_tabular_cells`) for cross-table Q&A.
+
+### 11.5 Workflow library (Phase 6+)
+
+**Mike reference:** dual workflow types in [`builtinWorkflows.ts`](../mike/frontend/src/app/components/workflows/builtinWorkflows.ts) — `assistant` (`prompt_md`) and `tabular` (`columns_config`). Workflows attach to chat messages and seed tabular review columns on creation ([`PRODUCT-STRENGTHS.md`](../mike/docs/PRODUCT-STRENGTHS.md) §4).
+
+Picard extends Mike's model with **evidence profiles** and **CARP intent bindings**:
+
+```typescript
+interface PicardWorkflow {
+  id: string;
+  type: 'assistant' | 'tabular' | 'composite';
+  title: string;
+  practice_area?: string;
+  prompt_md: string;
+  columns_config?: TabularColumn[];
+  steps?: WorkflowStep[];
+  evidence_profile: {
+    requires_corpus: boolean;
+    allowed_intents?: QueryIntent[];  // case_overview, entity_matter_listing, ...
+    allows_tabular: boolean;
+    allows_csv: boolean;
+    allows_web: boolean;              // default false
+  };
+  is_builtin: boolean;
+}
+
+interface WorkflowStep {
+  id: string;
+  kind: 'retrieve' | 'tabular_extract' | 'csv_query' | 'web_research' | 'draft_section';
+  config: Record<string, unknown>;
+  refuse_on_empty: boolean;
+}
+```
+
+**Built-in library (~15–20 playbooks, not Mike's 1200-line clone):**
+
+- Case overview memo → binds `case_overview` intent
+- Party portfolio listing → `entity_matter_listing`
+- Multi-constraint context brief → CARP bundle export
+- Due diligence column preset pack → tabular workflow
+- Clause comparison checklist → assistant + tabular hybrid
+
+**Storage:** local SQLite `workflows` + `hidden_workflows` (§6.3). No email sharing in v2 — export/import JSON instead of Mike's `workflow_shares`.
+
+**Tabular seed:** `AddNewTRModal` accepts `workflow_id` → copies `columns_config` (Mike `AddNewTRModal` pattern).
+
+**CSV-as-column-source (Phase 8):** composite workflows can pull column values from `workspace_data_rows` in addition to PDF tabular extraction.
 
 ---
 
@@ -1364,10 +1814,12 @@ Dedicated chat panel inside review (`TRChatPanel`) with citations that scroll to
 /                          → redirect to /workspaces
 /workspaces                → list + create
 /workspaces/[id]           → documents tab + link to assistant/tabular
-/workspaces/[id]/assistant → chat + PDF split view
+/workspaces/[id]/assistant → chat + PDF split view; workflow picker (Phase 6)
+/workspaces/[id]/workflows → workflow library (Phase 6)
+/workspaces/[id]/drafts/[draftId] → template draft viewer with section provenance (Phase 8)
 /workspaces/[id]/tabular   → list of reviews
 /workspaces/[id]/tabular/[reviewId] → TRTable + TRSidePanel
-/settings                  → LLM provider, data directory, model selection
+/settings                  → LLM provider, data directory, model selection, agent/web flags
 ```
 
 ### 12.2 Shared component library
@@ -1432,6 +1884,31 @@ Dedicated chat panel inside review (`TRChatPanel`) with citations that scroll to
 | POST   | `/chat/sessions`               | Create session               |
 | POST   | `/chat/stream`                 | Streaming Q&A with citations |
 | GET    | `/chat/sessions/{id}/messages` | History                      |
+| POST   | `/chat/stream`                 | Streaming Q&A; agent mode when `ENABLE_AGENT_MODE` |
+
+
+### Workflows (Phase 6+)
+
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/workflows` | List built-ins + custom (filter by practice area, type) |
+| POST | `/workflows` | Create custom workflow |
+| GET | `/workflows/{id}` | Workflow detail |
+| PATCH | `/workflows/{id}` | Update custom workflow |
+| POST | `/workflows/{id}/hide` | Hide built-in |
+| POST | `/workflows/{id}/export` | Export JSON (local sharing) |
+
+
+### Drafts & CSV (Phase 8+)
+
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| POST | `/workspaces/{id}/data/csv` | Upload CSV → `workspace_data_*` |
+| GET | `/workspaces/{id}/data/files` | List structured data files |
+| POST | `/drafts` | Generate draft from template + bindings |
+| GET | `/drafts/{id}` | Draft + section provenance |
 
 
 ### Tabular
@@ -1469,8 +1946,25 @@ Dedicated chat panel inside review (`TRChatPanel`) with citations that scroll to
 | **Phase 3 — Entity NER (EX-3) + citation chat** | **In progress** (EX-3 first, then §14.3.1–3.5) |
 | Phase 4 — Tabular review | Planned |
 | Phase 5 — OSS polish | Planned |
+| Phase 6 — Evidence-aware workflow library | Planned (post-v1) |
+| Phase 7 — Bounded agentic assistant | Planned (post-v1) |
+| Phase 8 — Template drafting + CSV | Planned (post-v1) |
+| Phase 9 — Controlled URL fetch | Planned (post-v1, optional) |
 
 Entity extraction sub-phases EX-0–EX-2 are complete (§8.3.4). **EX-3 (NER layer) is the active workstream** and gates citation chat quality — better party/identifier recall reduces CARP false refuses before users rely on `[N]` citations.
+
+**Post-v1 dependency note:** Phase 4 tabular must ship before Phase 6 tabular workflows. Phase 7 agent loop depends on Phase 6 workflow tools. Phase 8 composite workflows depend on Phase 7. Phase 9 shares agent infrastructure from Phase 7 but can ship independently of Phase 8.
+
+```mermaid
+flowchart TD
+  P3[Phase 3 Citation chat] --> P4[Phase 4 Tabular]
+  P4 --> P5[Phase 5 OSS polish]
+  P5 --> P6[Phase 6 Workflows]
+  P6 --> P7[Phase 7 Agentic assistant]
+  P7 --> P8[Phase 8 Templates plus CSV]
+  P7 --> P9[Phase 9 URL fetch]
+  P8 -.-> P9
+```
 
 ---
 
@@ -1768,6 +2262,102 @@ Entity extraction sub-phases EX-0–EX-2 are complete (§8.3.4). **EX-3 (NER lay
 
 ---
 
+### Phase 6: Evidence-aware workflow library (Weeks 19–22) — planned
+
+**Goal:** Mike-grade workflow UX without cloud deps; workflows bind to Picard query intents (§11.5).
+
+| Task | Deliverable |
+| ---- | ----------- |
+| Schema | `workflows`, `hidden_workflows` (§6.3) |
+| Built-ins | `backend/app/workflows/builtins.py` — ~15–20 CARP/tabular playbooks |
+| API | `GET/POST /workflows`, `POST /workflows/{id}/hide` |
+| Assistant attach | Workflow picker in `ChatInput`; `[Workflow: title (id)]` marker like Mike |
+| Tabular seed | `AddNewTRModal` accepts `workflow_id` → copies `columns_config` |
+| UI | `/workspaces/[id]/workflows` — practice-area filter; markdown editor for custom |
+
+**Acceptance criteria (§15.2 WF-*):**
+
+- **WF-01:** Selecting workflow triggers correct query intent routing (`case_overview` vs CARP vs `entity_matter_listing`)
+- **WF-02:** Tabular workflow creates review with preset columns in one click
+- Built-in library ships without network dependency
+
+---
+
+### Phase 7: Bounded agentic assistant (Weeks 23–28) — planned
+
+**Goal:** Evolve Phase 3 single-shot chat into Mike-style tool loop with Picard guardrails (§10.5, §4.2).
+
+| Task | Deliverable |
+| ---- | ----------- |
+| `agent_loop.py` | Custom litellm tool loop (~100 lines); max 5 iterations; Pydantic-validated tool args |
+| `tools/registry.py` | Modular tool registry; tier-gated registration; lazy-import optional deps |
+| Tools (Tier A) | `search_corpus`, `read_chunks` |
+| Tools (Tier B) | `read_tabular_cells`, `list_tabular_reviews` |
+| Tools (workflows) | `list_workflows`, `read_workflow` |
+| `model_router.py` | Extend with `acompletion(tools=..., stream=True)` |
+| SSE events | `tool_call_start`, `workflow_applied`, `step_refused` (§10.1) |
+| Persistence | Assistant messages as JSON event array (Mike pattern) |
+| UI | `PreResponseWrapper` step count; tool status labels |
+
+**Explicitly NOT in Phase 7:** web fetch, DOCX generation, document editing.
+
+**Acceptance criteria (§15.2 AG-*):**
+
+- **AG-01:** Multi-step question (retrieve → summarize → compare tabular column) completes with valid `[N]` on all corpus claims
+- **AG-02:** Empty retrieval step triggers `step_refused` — no hallucinated filler
+- **AG-03:** Tool loop p95 ≤ 30s on Chester corpus with Ollama 8B (5-iteration cap)
+
+---
+
+### Phase 8: Template drafting + CSV data sheets (Weeks 29–34) — planned
+
+**Goal:** Draft documents from templates + tabular/CSV data + corpus evidence (§8.6).
+
+| Task | Deliverable |
+| ---- | ----------- |
+| CSV ingest | stdlib `csv` → SQLite `workspace_data_*`; row/column citation refs |
+| Templates | Jinja2 sandbox in `~/.picard-data/templates/` |
+| Composite runner | `workflow_runner.py` — SQLite-persisted step executor |
+| Tool | `draft_from_template(template_id, bindings)` |
+| Entity join | `csv_entity_join.py` — match CSV party columns to `page_entities` |
+| Composite workflows | `type: composite` — e.g. DD memo: tabular → CARP → draft sections |
+| Output | Markdown draft + `draft_documents` + section-level `sources_json` |
+| UI | Draft viewer: section sidebar with provenance; highlight gaps |
+
+**Picard vs Mike:** Mike's `generate_docx` is free-form generation. Picard drafts are **template-bound, section-provenanced, gap-marked**.
+
+**Acceptance criteria (§15.2 DR-* / CSV-*):**
+
+- **CSV-01:** 1000-row CSV ingests locally; cell citation resolves to row
+- **DR-01:** Template draft fills ≥90% of evidence-backed placeholders; unfilled slots listed
+- **DR-02:** Cross-source workflow (CSV party → CARP → draft section) cites both tiers correctly
+
+---
+
+### Phase 9: Controlled URL fetch (Weeks 35–38, optional) — planned
+
+**Goal:** Fetch **user-supplied URLs** without breaking the local evidence contract (§7.4 Tier C). **No search/discovery.**
+
+| Task | Deliverable |
+| ---- | ----------- |
+| Feature flag | `ENABLE_WEB_RESEARCH=false` default |
+| Dep | `trafilatura` (lazy-imported when flag on) |
+| Tool | `web_fetch(url)` — httpx GET → trafilatura → `research_snapshots` + file cache |
+| URL validation | Allowlist/blocklist; `WEB_SNAPSHOT_MAX_BYTES` cap; timeout |
+| Citations | `[ext:N]` namespace; distinct UI styling |
+| Workflows | `evidence_profile.allows_web: true` + pre-seeded URL list |
+| Air-gap | When disabled, `web_fetch` not registered; zero outbound HTTP |
+
+**Explicitly NOT in Phase 9:** DuckDuckGo/search APIs, Playwright, Crawl4AI, sitemap crawlers.
+
+**Acceptance criteria (§15.2 WEB-*):**
+
+- **WEB-01:** External claims never appear with `[N]` bbox citations
+- **WEB-02:** With flag off, zero outbound HTTP during chat
+- **WEB-03:** Repeat fetch serves local cache unless stale TTL exceeded
+
+---
+
 ## 15. Testing & acceptance criteria
 
 Generic RAG metrics (average faithfulness, single Recall@K) are **insufficient** for picard-oss. Legal retrieval fails in ways IR benchmarks miss: wrong-agreement boilerplate, OR-retrieval conflation on multi-entity queries, answering when intersection is empty, and citation correctness without citation faithfulness. Evaluation is organized in **three tiers**:
@@ -1963,6 +2553,37 @@ Re-run after every extractor change: `backfill_entities.py` → `export_test_cor
 | TB-02 | Regenerate single cell | No full-batch re-run required |
 | TB-03 | Excel export fidelity | Opens cleanly; citation markers stripped |
 
+#### Phase 6 — Workflow library
+
+| ID | Metric | Initial gate |
+|----|--------|--------------|
+| WF-01 | Intent routing accuracy | Workflow selection triggers correct CARP/FTS5/intent path on golden set |
+| WF-02 | Tabular workflow seed | One-click review creation with preset columns |
+
+#### Phase 7 — Agentic assistant
+
+| ID | Metric | Initial gate |
+|----|--------|--------------|
+| AG-01 | Multi-step citation integrity | 100% corpus claims use valid `[N]` after tool loop |
+| AG-02 | Per-step refuse rate | 100% empty retrieval tools emit `step_refused`, no filler |
+| AG-03 | Agent loop latency p95 | ≤ 30s on Chester with Ollama 8B, 5-iteration cap |
+
+#### Phase 8 — Templates + CSV
+
+| ID | Metric | Initial gate |
+|----|--------|--------------|
+| CSV-01 | CSV row citation resolve | 100% `[csv:...]` refs resolve to ingested row |
+| DR-01 | Template fill rate | ≥ 90% evidence-backed placeholders filled; gaps listed |
+| DR-02 | Cross-tier citation | CSV + corpus claims use correct tier markers |
+
+#### Phase 9 — URL fetch
+
+| ID | Metric | Initial gate |
+|----|--------|--------------|
+| WEB-01 | External tier separation | 0% external claims use bbox `[N]` |
+| WEB-02 | Air-gap HTTP | 0 outbound requests when flag off |
+| WEB-03 | Snapshot cache hit | Repeat URL serves cache within TTL |
+
 **Why CARP metrics differ from generic RAG:** Conjunctive queries need **bundle-level** precision/recall and decoy rejection — chunk Recall@K inflates when OR-retrieval returns unrelated co-mentions. See §9.5.2.
 
 **External references:** [LegalBench-RAG](https://arxiv.org/abs/2408.10343) (char P/R + DRM), [GaRAGe/RefusalBench](https://arxiv.org/abs/2506.07671) (refusal), [CiteEval](https://aclanthology.org/2025.acl-long.1574/) (citation QA), [TREC Legal Track](https://trec-legal.umiacs.umd.edu/) (Boolean/proximity eval culture).
@@ -1973,7 +2594,7 @@ Re-run after every extractor change: `backfill_entities.py` → `export_test_cor
 
 ```
 backend/eval/
-├── metrics.py          # R/C/F/P/S/E/CT/FG/AB/TB metric functions
+├── metrics.py          # R/C/F/P/S/E/CT/FG/AB/TB/WF/AG/DR/CSV/WEB metric functions
 ├── runner.py           # gold_labels.jsonl → scorecard JSON
 ├── baselines.py        # OR-BM25, chunk-AND, NEAR, full-corpus BM25
 ├── gold_labels.jsonl   # One JSON object per line (committed)
@@ -2083,17 +2704,20 @@ Run before Phase 2 tag and monthly when golden set changes. Document results in 
 ## 16. Future extensions (post-v1)
 
 
-| Extension                 | Source inspiration                    | Complexity |
-| ------------------------- | ------------------------------------- | ---------- |
-| DOCX viewing + highlights | Mike `DocxView.tsx`                   | Medium     |
-| Workflow library          | Mike `builtinWorkflows.ts`            | Medium     |
-| Multi-user + auth         | LegalDocX Supabase JWT                | High       |
-| MCP server                | LegalDocX `Platform/04-mcp-bridge.md` | Medium     |
-| Vector hybrid search | sqlite-vec or LanceDB | Medium |
-| Entity alias / coreference ("ABC" = "ABC Ltd") | EX-4 party linker + optional alias table | Medium |
-| GraphRAG optional module | LegalDocX Neo4j path | Very high |
-| Tracked change editing    | Mike EditCards                        | High       |
-| On-prem deployment guide  | LegalDocX Tier A doc                  | Medium     |
+| Extension                 | Source inspiration                    | Complexity | Notes |
+| ------------------------- | ------------------------------------- | ---------- | ----- |
+| DOCX viewing + highlights | Mike `DocxView.tsx`                   | Medium     | Markdown drafts ship Phase 8 first |
+| Multi-user + auth         | LegalDocX Supabase JWT                | High       | |
+| MCP server                | LegalDocX `Platform/04-mcp-bridge.md` | Medium     | Phase 10 — expose corpus/tabular tools via stdio |
+| Vector hybrid search | sqlite-vec or LanceDB | Medium | |
+| Entity alias / coreference ("ABC" = "ABC Ltd") | EX-4 party linker + optional alias table | Medium | |
+| GraphRAG optional module | LegalDocX Neo4j path | Very high | |
+| Tracked change editing    | Mike EditCards                        | High       | |
+| On-prem deployment guide  | LegalDocX Tier A doc                  | Medium     | |
+| Web search discovery      | duckduckgo-search, Argus-style routers | Medium   | Deferred — Phase 9 is URL-only |
+| Workflow email sharing    | Mike `ShareWorkflowModal`             | Medium     | Deferred — JSON export/import instead |
+
+**Promoted to concrete phases (§14):** workflow library (Phase 6), agentic assistant (Phase 7), template drafting + CSV (Phase 8), controlled URL fetch (Phase 9).
 
 
 ---
@@ -2118,6 +2742,14 @@ Run before Phase 2 tag and monthly when golden set changes. Document results in 
 | Tiered model routing | LegalDocX SLM/LLM role split | — | `model_router.py` (§4.1) |
 | Hybrid entity extract | LegalDocX SLM-at-ingest (GraphRAG scale) | — | EX-1–EX-5 (§8.3); rules + GLiNER ONNX |
 | Eval harness + gold labels | Harvey BigLaw Bench, LegalBench-RAG | — | `backend/eval/` (§15.3) |
+| Assistant tool loop | — | `chatTools.ts` `runLLMStream` | `agent_loop.py` + refuse per tool (§10.5) |
+| Workflow library | — | `builtinWorkflows.ts` | `workflows/builtins.py` + evidence profiles (§11.5) |
+| Workflow attach marker | — | `[Workflow: title (id)]` in ChatInput | Same pattern Phase 6 |
+| Template doc generation | — | `generate_docx` tool | **Rejected** → `draft_from_template` Phase 8 |
+| CSV data sheets | — | Excel export only | stdlib CSV ingest + entity join Phase 8 |
+| URL web context | — | Not implemented | Phase 9 URL-only fetch + `[ext:N]` |
+| Composite workflow runner | — | LLM follows prompt only | `workflow_runner.py` SQLite steps Phase 8 |
+| MCP tool exposure | LegalDocX MCP bridge | — | Phase 10 post-v1 |
 
 
 ---
@@ -2180,6 +2812,21 @@ CONTRACT_NER_MODEL=lucasorrentino/Contractner
 ENABLE_BLACKSTONE=false                   # UK litigation optional
 ENABLE_EYECITE=true                       # US citation spans → identifier
 ENTITY_NER_MAX_PAGES=0                    # 0 = all pages; e.g. 10 for defer mode
+
+# Agent + workflows (Phase 6–7, post-v1)
+ENABLE_AGENT_MODE=false
+AGENT_MAX_ITERATIONS=5
+
+# CSV + templates (Phase 8, post-v1)
+ENABLE_CSV_INGEST=false
+
+# URL fetch (Phase 9, post-v1 — user-supplied URLs only, no search)
+ENABLE_WEB_RESEARCH=false
+WEB_FETCH_TIMEOUT_SECONDS=15
+WEB_SNAPSHOT_MAX_BYTES=524288             # 512KB text cap per URL
+
+# Optional structured extraction retry (Phase 4/8 tabular + draft JSON)
+# ENABLE_INSTRUCTOR=false
 
 # Eval / test corpus (Phase 2)
 # PICARD_TEST_DATABASE_URL=sqlite:///...  # override for CI; default: test/fixtures/corpus/picard-corpus.db

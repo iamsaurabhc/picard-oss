@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
@@ -11,6 +12,7 @@ from app.services.entity_index import lookup_pages_for_constraint
 from app.services.fts_query_builder import build_fts_match_string
 from app.services.fts_search import FtsHit, fts_search, fts_search_on_pages, parse_bbox
 from app.services.query_understanding import FtsPlan, QueryUnderstanding, SearchPass
+from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
 
 
 @dataclass
@@ -198,7 +200,7 @@ def _pass_labels_with_hits(
     return labels
 
 
-def planned_retrieve(
+def planned_retrieve_with_progress(
     db: Session,
     understanding: QueryUnderstanding,
     *,
@@ -206,11 +208,15 @@ def planned_retrieve(
     document_ids: list[str] | None = None,
     query: str = "",
     config: PlannedRetrievalConfig,
-) -> tuple[list[SearchHit], dict]:
-    """Execute search_passes as independent FTS queries and merge into one pool."""
+    emitter: RetrievalProgressEmitter | None = None,
+) -> Iterator[dict]:
+    """Execute search_passes; yield progress/snippet events; return hits + diagnostics."""
+    progress = emitter or RetrievalProgressEmitter()
     pool: dict[str, FtsHit] = {}
     pass_diag: list[str] = []
     pinned_ids: set[str] = set()
+
+    yield progress.progress("search", "start", strategy=config.strategy)
 
     anchor_top_k = config.anchor_top_k or max(config.pool_k // 2, 8)
     anchor_plan = FtsPlan(
@@ -220,6 +226,7 @@ def planned_retrieve(
     )
     anchor_fts = build_fts_match_string(anchor_plan, raw_query_fallback=query)
     if anchor_fts or understanding.fts.must_terms or understanding.fts.phrases:
+        yield progress.progress("search", "start", label="anchor")
         anchor_hits = fts_search(
             db,
             query=query,
@@ -231,6 +238,12 @@ def planned_retrieve(
         )
         _merge_hits(pool, anchor_hits)
         pass_diag.append(f"anchor:{len(anchor_hits)}")
+        best = progress.best_hit(anchor_hits)
+        if best:
+            snippet = progress.snippet_from_hit(best, "anchor")
+            if snippet:
+                yield snippet
+        yield progress.progress("search", "done", label="anchor", hit_count=len(anchor_hits))
 
     search_passes = list(understanding.search_passes)
     query_terms = set(understanding.fts.must_terms)
@@ -243,6 +256,7 @@ def planned_retrieve(
     for sp in search_passes:
         if not sp.fts_terms:
             continue
+        yield progress.progress("search", "start", label=sp.label)
         pass_plan = FtsPlan(must_terms=sp.fts_terms[:2], operator=sp.operator)
         pass_fts = build_fts_match_string(pass_plan, raw_query_fallback=" ".join(sp.fts_terms))
         pass_hits = fts_search(
@@ -261,13 +275,21 @@ def planned_retrieve(
             pinned_ids.add(best.chunk_id)
         _merge_hits(pool, pass_hits)
         pass_diag.append(f"{sp.label}:{len(pass_hits)}")
+        best = progress.best_hit(pass_hits)
+        if best:
+            snippet = progress.snippet_from_hit(best, sp.label)
+            if snippet:
+                yield snippet
+        yield progress.progress("search", "done", label=sp.label, hit_count=len(pass_hits))
 
     for c in _valid_constraints(understanding.constraints):
+        label = f"entity_{c.type}"
         pages = lookup_pages_for_constraint(
             db, workspace_id, c.type, c.canonical, document_ids,
         )
         if not pages:
             continue
+        yield progress.progress("search", "start", label=label, constraint=c.canonical)
         entity_hits = fts_search_on_pages(
             db,
             query=anchor_fts or query,
@@ -276,7 +298,13 @@ def planned_retrieve(
             top_k=max(config.pool_k // 4, 4),
         )
         _merge_hits(pool, entity_hits)
-        pass_diag.append(f"entity_{c.type}:{len(entity_hits)}")
+        pass_diag.append(f"{label}:{len(entity_hits)}")
+        best = progress.best_hit(entity_hits)
+        if best:
+            snippet = progress.snippet_from_hit(best, label)
+            if snippet:
+                yield snippet
+        yield progress.progress("search", "done", label=label, hit_count=len(entity_hits))
 
     merged = sorted(pool.values(), key=lambda h: h.score)
     early_thresholds = _early_page_thresholds(db, document_ids) if config.early_page_bias else {}
@@ -303,4 +331,28 @@ def planned_retrieve(
     if early_thresholds:
         diagnostics["early_page_thresholds"] = early_thresholds
 
+    yield progress.progress("search", "done", pool_size=len(pool), hit_count=len(diverse))
     return [_fts_hit_to_search_hit(h) for h in diverse], diagnostics
+
+
+def planned_retrieve(
+    db: Session,
+    understanding: QueryUnderstanding,
+    *,
+    workspace_id: str,
+    document_ids: list[str] | None = None,
+    query: str = "",
+    config: PlannedRetrievalConfig,
+) -> tuple[list[SearchHit], dict]:
+    """Execute search_passes as independent FTS queries and merge into one pool."""
+    _events, result = consume_retrieval_generator(
+        planned_retrieve_with_progress(
+            db,
+            understanding,
+            workspace_id=workspace_id,
+            document_ids=document_ids,
+            query=query,
+            config=config,
+        )
+    )
+    return result
