@@ -4,7 +4,11 @@ import json
 import logging
 import re
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.config import settings
+from app.db.models import Entity, EntityMention
 from app.schemas import SearchHit
 from app.services.model_router import ModelRole, completion
 from app.services.query_understanding import SubQuestion
@@ -156,6 +160,60 @@ def _listing_anchored_excerpt(text: str, max_chars: int) -> str | None:
     return excerpt
 
 
+def _entity_anchored_excerpt(
+    db: Session,
+    hit: SearchHit,
+    max_chars: int,
+    *,
+    workspace_id: str | None = None,
+) -> str | None:
+    """Center excerpt on indexed entity mention span when available."""
+    stmt = (
+        select(EntityMention)
+        .join(Entity, Entity.id == EntityMention.entity_id)
+        .where(EntityMention.chunk_id == hit.chunk_id)
+    )
+    if workspace_id:
+        stmt = stmt.where(Entity.workspace_id == workspace_id)
+    rows = db.scalars(stmt).all()
+    if not rows:
+        rows = db.scalars(
+            select(EntityMention).where(EntityMention.chunk_id == hit.chunk_id)
+        ).all()
+    if not rows:
+        return None
+
+    cleaned = (hit.text_content or "").strip().replace("\n", " ")
+    if not cleaned:
+        return None
+
+    best: tuple[int, int, str] | None = None
+    for mention in rows:
+        surface = (mention.surface_text or "").strip()
+        if not surface:
+            continue
+        start = mention.char_start
+        end = mention.char_end
+        if start is not None and end is not None and 0 <= start < end <= len(cleaned):
+            best = (start, end, surface)
+            break
+        idx = cleaned.casefold().find(surface.casefold())
+        if idx >= 0:
+            best = (idx, idx + len(surface), surface)
+            break
+
+    if not best:
+        return None
+
+    start, end, _ = best
+    win_start = max(0, start - max_chars // 3)
+    win_end = min(len(cleaned), max(end + max_chars // 2, win_start + max_chars))
+    excerpt = cleaned[win_start:win_end].strip()
+    if win_end < len(cleaned):
+        excerpt = _trim_excerpt_end(excerpt, max_chars)
+    return excerpt[:max_chars]
+
+
 def _best_excerpt(
     text: str,
     max_chars: int,
@@ -163,6 +221,9 @@ def _best_excerpt(
     sub_questions: list[SubQuestion] | None = None,
     prefer_amounts: bool = False,
     prefer_listing: bool = False,
+    db: Session | None = None,
+    hit: SearchHit | None = None,
+    workspace_id: str | None = None,
 ) -> str:
     """Pick a window maximizing generic fact-bearing tokens (not citation headers)."""
     cleaned = (text or "").strip().replace("\n", " ")
@@ -170,6 +231,13 @@ def _best_excerpt(
         return ""
     if len(cleaned) <= max_chars:
         return cleaned
+
+    if db is not None and hit is not None:
+        entity_excerpt = _entity_anchored_excerpt(
+            db, hit, max_chars, workspace_id=workspace_id,
+        )
+        if entity_excerpt:
+            return entity_excerpt
 
     if prefer_listing:
         anchored = _listing_anchored_excerpt(cleaned, max_chars)
@@ -287,6 +355,8 @@ def select_excerpts(
     prefer_listing: bool = False,
     intent: str = "general",
     coverage_goal: str = "",
+    db: Session | None = None,
+    workspace_id: str | None = None,
 ) -> dict[str, str]:
     """Return chunk_id -> excerpt text. Uses SLM when enabled, else best window."""
     if not hits:
@@ -299,6 +369,9 @@ def select_excerpts(
                 sub_questions=sub_questions,
                 prefer_amounts=prefer_amounts,
                 prefer_listing=prefer_listing,
+                db=db,
+                hit=h,
+                workspace_id=workspace_id,
             )
             for h in hits
         }
@@ -335,6 +408,9 @@ def select_excerpts(
                 sub_questions=sub_questions,
                 prefer_amounts=prefer_amounts,
                 prefer_listing=prefer_listing,
+                db=db,
+                hit=h,
+                workspace_id=workspace_id,
             )
             for h in hits
         }
@@ -371,6 +447,9 @@ def select_excerpts(
                         sub_questions=sub_questions,
                         prefer_amounts=prefer_amounts,
                         prefer_listing=prefer_listing,
+                        db=db,
+                        hit=h,
+                        workspace_id=workspace_id,
                     ),
                 )
             return out
@@ -383,6 +462,9 @@ def select_excerpts(
             sub_questions=sub_questions,
             prefer_amounts=prefer_amounts,
             prefer_listing=prefer_listing,
+            db=db,
+            hit=h,
+            workspace_id=workspace_id,
         )
         for h in hits
     }

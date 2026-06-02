@@ -1,114 +1,19 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { LayoutInspectorPanel } from "@/components/LayoutInspectorPanel";
-import { LayoutPDFViewer } from "@/components/LayoutPDFViewer";
-import { StatusBadge } from "@/components/ui/badge";
-import { picardApi } from "@/lib/picardApi";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect } from "react";
 
-export default function DocumentViewerPage() {
+export default function LegacyDocumentPage() {
   const params = useParams<{ id: string; documentId: string }>();
-  const workspaceId = params.id;
-  const documentId = params.documentId;
-  const [page, setPage] = useState(1);
-  const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
-  const [showAllBlocks, setShowAllBlocks] = useState(true);
-
-  const { data: workspace } = useQuery({
-    queryKey: ["workspace", workspaceId],
-    queryFn: () => picardApi.getWorkspace(workspaceId),
-  });
-
-  const { data: document, isLoading: docLoading } = useQuery({
-    queryKey: ["document", documentId],
-    queryFn: () => picardApi.getDocument(documentId),
-    refetchInterval: (q) => {
-      const status = q.state.data?.parse_status;
-      return status === "pending" || status === "parsing" ? 2000 : false;
-    },
-  });
-
-  const { data: chunks = [], isLoading: chunksLoading } = useQuery({
-    queryKey: ["document-chunks", documentId, page],
-    queryFn: () => picardApi.getDocumentChunks(documentId, { page }),
-    enabled: document?.parse_status === "done",
-  });
+  const router = useRouter();
 
   useEffect(() => {
-    setSelectedChunkId(null);
-  }, [page]);
-
-  useEffect(() => {
-    if (chunks.length > 0 && selectedChunkId && !chunks.some((c) => c.id === selectedChunkId)) {
-      setSelectedChunkId(null);
-    }
-  }, [chunks, selectedChunkId]);
-
-  if (docLoading) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-        Loading document…
-      </div>
-    );
-  }
-
-  if (!document) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-neutral-500">
-        <p>Document not found.</p>
-        <Link href={`/workspaces/${workspaceId}`} className="text-neutral-900 underline">
-          Back to workspace
-        </Link>
-      </div>
-    );
-  }
+    router.replace(`/vault/${params.documentId}`);
+  }, [params.documentId, router]);
 
   return (
-    <div className="flex h-[calc(100vh)] min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-4 py-2 text-sm">
-        <Link href={`/workspaces/${workspaceId}`} className="text-neutral-500 hover:text-neutral-900">
-          {workspace?.name ?? "Workspace"}
-        </Link>
-        <span className="text-neutral-300">/</span>
-        <span className="truncate font-medium text-neutral-900">{document.file_name}</span>
-        <StatusBadge status={document.parse_status} />
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-[55]">
-          <LayoutPDFViewer
-            documentId={documentId}
-            page={page}
-            onPageChange={setPage}
-            chunks={chunks}
-            selectedChunkId={selectedChunkId}
-            showAllBlocks={showAllBlocks}
-          />
-        </div>
-        <div className="min-w-0 flex-[45]">
-          {chunksLoading && document.parse_status === "done" ? (
-            <div className="flex h-full items-center justify-center border-l border-neutral-200 text-sm text-neutral-500">
-              Loading layout…
-            </div>
-          ) : (
-            <LayoutInspectorPanel
-              document={document}
-              page={page}
-              chunks={chunks}
-              selectedChunkId={selectedChunkId}
-              onSelectChunk={(id) => {
-                setSelectedChunkId(id);
-                setShowAllBlocks(false);
-              }}
-              showAllBlocks={showAllBlocks}
-              onShowAllBlocksChange={setShowAllBlocks}
-            />
-          )}
-        </div>
-      </div>
+    <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
+      Redirecting…
     </div>
   );
 }

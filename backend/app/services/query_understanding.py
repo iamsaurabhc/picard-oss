@@ -453,7 +453,7 @@ def _fallback_search_passes(
             return [SearchPass(label="entity_anchor", fts_terms=clean[:2], operator="AND", pin_best=False)]
         return []
 
-    if intent == "case_overview" and _is_case_overview_query(query):
+    if intent == "case_overview":
         facets = _default_facet_queries(case_terms)
         return _passes_from_facet_queries(facets)
 
@@ -959,6 +959,54 @@ def _dedupe_terms(tokens: list[str]) -> list[str]:
     return out
 
 
+def _compound_sub_questions_from_query(query: str) -> list[SubQuestion]:
+    """Emit sub-questions for compound factual queries without regex intent classifiers."""
+    q = query.casefold()
+    out: list[SubQuestion] = []
+    if query.count("?") < 2 and not (
+        ("name" in q or "son" in q or "child" in q)
+        and ("age" in q or "old" in q or "date" in q or "accident" in q)
+    ):
+        return out
+    if "name" in q or "son" in q or "child" in q or "who" in q:
+        out.append(
+            SubQuestion(
+                label="name",
+                question="Who is the named person?",
+                fts_terms=["infant", "son"],
+                pin_best=True,
+            )
+        )
+    if "age" in q or "how old" in q or "old" in q:
+        out.append(
+            SubQuestion(
+                label="age",
+                question="What is the person's age?",
+                fts_terms=["aged", "years"],
+                pin_best=True,
+            )
+        )
+    if "date" in q or "accident" in q or "when" in q or "incident" in q:
+        out.append(
+            SubQuestion(
+                label="date",
+                question="When did the incident occur?",
+                fts_terms=["accident", "occurred"],
+                pin_best=True,
+            )
+        )
+    if _is_factual_amount_query(query) or "damage" in q or "amount" in q or "claim" in q:
+        out.append(
+            SubQuestion(
+                label="damages",
+                question="What damages or amount was claimed?",
+                fts_terms=["damages", "sum"],
+                pin_best=True,
+            )
+        )
+    return out
+
+
 def _token_catalog_fallback_understanding(
     query: str,
     *,
@@ -978,10 +1026,14 @@ def _token_catalog_fallback_understanding(
     if party and _looks_like_entity_listing_query(query):
         intent = "entity_matter_listing"
     case_terms = _case_name_terms(query)
+    q = query.casefold()
     if intent == "general" and case_terms:
-        q = query.casefold()
         if "case" in q and ("detail" in q or "overview" in q or "list" in q):
             intent = "case_overview"
+    if intent == "general" and any(
+        kw in q for kw in ("summarize", "summary", "briefing", "brief me", "what happened", "narrative")
+    ):
+        intent = "case_overview"
     must_terms = _dedupe_terms((case_terms or []) + _extract_tokens(query)[:2])
     search_passes = _fallback_search_passes(
         query, intent, case_terms, party_constraint=party,
@@ -989,8 +1041,18 @@ def _token_catalog_fallback_understanding(
     facet_queries = _facet_queries_from_passes(search_passes)
     if intent == "entity_matter_listing":
         coverage_goal = "per-document matter listing"
+    elif intent == "case_overview":
+        coverage_goal = "broad matter summary"
     else:
         coverage_goal = "relevant passages"
+
+    sub_questions = _compound_sub_questions_from_query(query)
+    if sub_questions and intent == "general":
+        intent = "factual_lookup"
+        coverage_goal = "pinpoint fact"
+    if sub_questions and not search_passes:
+        search_passes = _passes_from_sub_questions(sub_questions)
+
     return QueryUnderstanding(
         retrieval_mode="SIMPLE",
         intent=intent,
@@ -998,6 +1060,7 @@ def _token_catalog_fallback_understanding(
         fts=FtsPlan(must_terms=must_terms, operator="AND"),
         facet_queries=facet_queries,
         search_passes=search_passes,
+        sub_questions=sub_questions,
         coverage_goal=coverage_goal,
         confidence=0.35 if party else 0.25,
         used_llm=False,

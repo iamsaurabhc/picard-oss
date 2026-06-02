@@ -12,6 +12,33 @@ export type Workspace = {
   updated_at: string;
 };
 
+export type WorkspaceDocumentCounts = {
+  total: number;
+  done: number;
+  pending: number;
+  parsing: number;
+  error: number;
+};
+
+export type PartyHighlight = {
+  display_value: string;
+  document_count: number;
+};
+
+export type DocTypeCount = {
+  doc_type: string;
+  count: number;
+};
+
+export type WorkspaceOverview = {
+  workspace: Workspace;
+  documents: WorkspaceDocumentCounts;
+  tabular_reviews: number;
+  parties: PartyHighlight[];
+  doc_types: DocTypeCount[];
+  recent_documents: DocumentRecord[];
+};
+
 export type DocumentRecord = {
   id: string;
   workspace_id: string;
@@ -301,6 +328,7 @@ export const picardApi = {
       body: JSON.stringify(body),
     }),
   getWorkspace: (id: string) => request<Workspace>(`/workspaces/${id}`),
+  getWorkspaceOverview: (id: string) => request<WorkspaceOverview>(`/workspaces/${id}/overview`),
   listDocuments: (workspaceId: string) =>
     request<DocumentRecord[]>(`/workspaces/${workspaceId}/documents`),
   uploadDocument: async (workspaceId: string, file: File) => {

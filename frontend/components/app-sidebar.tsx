@@ -3,24 +3,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { WorkspaceSelector } from "@/components/WorkspaceSelector";
 
 const NAV = [
-  { href: "/workspaces", label: "Workspaces" },
-  { href: "/search", label: "Search" },
-  { href: "/chat", label: "Chat" },
+  { href: "/", label: "Dashboard", match: (p: string) => p === "/" },
+  { href: "/vault", label: "Vault", match: (p: string) => p === "/vault" || p.startsWith("/vault/") },
+  { href: "/tabular", label: "Tabular", match: (p: string) => p === "/tabular" || p.startsWith("/tabular/") },
+  { href: "/search", label: "Search", match: (p: string) => p === "/search" || p.startsWith("/search/") },
+  { href: "/chat", label: "Chat", match: (p: string) => p === "/chat" || p.startsWith("/chat/") },
 ] as const;
 
 export function AppSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-56 flex-col border-r border-neutral-200 bg-white p-4">
-      <div className="mb-8 font-serif text-xl" style={{ fontFamily: "var(--font-garamond), serif" }}>
+    <aside className="flex w-56 shrink-0 flex-col border-r border-neutral-200 bg-white p-4">
+      <div className="mb-2 font-serif text-xl" style={{ fontFamily: "var(--font-garamond), serif" }}>
         Picard.Law OSS
       </div>
+      <WorkspaceSelector />
       <nav className="flex flex-col gap-1 text-sm">
-        {NAV.map(({ href, label }) => {
-          const active = pathname === href || pathname.startsWith(`${href}/`);
+        {NAV.map(({ href, label, match }) => {
+          const active = match(pathname);
           return (
             <Link
               key={href}
@@ -37,6 +41,17 @@ export function AppSidebar() {
           );
         })}
       </nav>
+      <div className="mt-auto pt-6">
+        <Link
+          href="/workspaces"
+          className={cn(
+            "block rounded px-2 py-1.5 text-xs text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800",
+            pathname.startsWith("/workspaces") && "font-medium text-neutral-800"
+          )}
+        >
+          Manage workspaces
+        </Link>
+      </div>
     </aside>
   );
 }

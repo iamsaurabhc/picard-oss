@@ -60,6 +60,8 @@ def build_citation_map(
     prefer_listing: bool = False,
     intent: str = "general",
     coverage_goal: str = "",
+    db=None,
+    workspace_id: str | None = None,
 ) -> CitationMap:
     seen: set[str] = set()
     refs: list[CitationRef] = []
@@ -86,6 +88,8 @@ def build_citation_map(
         prefer_listing=prefer_listing,
         intent=intent,
         coverage_goal=coverage_goal,
+        db=db,
+        workspace_id=workspace_id,
     )
 
     for hit in unique_hits:
@@ -126,12 +130,39 @@ TABULAR_CELL_CITE_HINT = (
 )
 
 
+def _format_source_block(
+    ref: CitationRef,
+    *,
+    intent: str,
+    excerpt_cap: int,
+) -> str:
+    doc_label = ref.document_name or ref.document_id
+    heading_tail = ""
+    if ref.heading_path:
+        parts = [p.strip() for p in ref.heading_path.split(">") if p.strip()]
+        if parts:
+            heading_tail = f" — {parts[-1]}"
+    body = ref.preview[:excerpt_cap] if ref.preview else ""
+    if intent in {"case_overview", "entity_matter_listing", "factual_lookup"}:
+        return (
+            f"[{ref.index}] {doc_label} (page {ref.page}){heading_tail}\n"
+            f"   Excerpt: \"{body}\""
+        )
+    pinpoint = ref.pinpoint_quote or ref.preview[:200]
+    return (
+        f"[{ref.index}] {doc_label} (page {ref.page}){heading_tail}\n"
+        f"   Pinpoint: \"{pinpoint}\""
+    )
+
+
 def build_system_prompt(
     citation_map: CitationMap,
     *,
     intent: str = "general",
     sub_questions: list[SubQuestion] | None = None,
     target_entity: str | None = None,
+    sub_question_coverage: dict[str, str | None] | None = None,
+    coverage_goal: str = "",
 ) -> str:
     if intent in {"case_overview", "entity_matter_listing"}:
         excerpt_cap = 1200 if intent == "entity_matter_listing" else 800
@@ -217,6 +248,8 @@ def build_system_prompt(
         ]
         if sub_lines:
             lines.extend(["", "Sub-questions to answer:", *sub_lines])
+        if coverage_goal:
+            lines.extend(["", f"Coverage goal: {coverage_goal}"])
         lines.extend(["", "Sources:"])
     else:
         lines = [
@@ -230,25 +263,25 @@ def build_system_prompt(
             "",
             "Sources:",
         ]
-    for ref in citation_map.refs:
-        doc_label = ref.document_name or ref.document_id
-        heading_tail = ""
-        if ref.heading_path:
-            parts = [p.strip() for p in ref.heading_path.split(">") if p.strip()]
-            if parts:
-                heading_tail = f" — {parts[-1]}"
-        body = ref.preview[:excerpt_cap] if ref.preview else ""
-        if intent in {"case_overview", "entity_matter_listing", "factual_lookup"}:
-            lines.append(
-                f"[{ref.index}] {doc_label} (page {ref.page}){heading_tail}\n"
-                f"   Excerpt: \"{body}\""
-            )
-        else:
-            pinpoint = ref.pinpoint_quote or ref.preview[:200]
-            lines.append(
-                f"[{ref.index}] {doc_label} (page {ref.page}){heading_tail}\n"
-                f"   Pinpoint: \"{pinpoint}\""
-            )
+    chunk_to_ref = {r.chunk_id: r for r in citation_map.refs}
+    if intent == "factual_lookup" and sub_questions and sub_question_coverage:
+        cited_ids: set[str] = set()
+        for sq in sub_questions:
+            cid = sub_question_coverage.get(sq.label)
+            ref = chunk_to_ref.get(cid) if cid else None
+            label = sq.label.replace("_", " ").title()
+            lines.append(f"### Evidence for: {label}")
+            if ref:
+                lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
+                cited_ids.add(ref.chunk_id)
+            else:
+                lines.append("(no dedicated excerpt in context for this sub-question)")
+        for ref in citation_map.refs:
+            if ref.chunk_id not in cited_ids:
+                lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
+    else:
+        for ref in citation_map.refs:
+            lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
     return "\n".join(lines)
 
 

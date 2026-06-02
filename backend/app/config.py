@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     chat_listing_max_docs: int = 12
     carp_top_k_bundles: int = 8
 
+    enable_context_expansion: bool = True
+    context_expansion_max_chunks: int = 24
+    context_expansion_include_page_siblings: bool = True
+    context_gap_fill_max_passes: int = 2
+
     enable_chat: bool = True
     enable_ner_entity_extract: bool = False
     extractor_version: str = "hybrid_v1"

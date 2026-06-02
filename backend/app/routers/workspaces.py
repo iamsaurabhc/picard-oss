@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Workspace
 from app.db.session import get_db, utc_now_iso
-from app.schemas import WorkspaceCreate, WorkspaceOut, WorkspaceUpdate
+from app.schemas import WorkspaceCreate, WorkspaceOut, WorkspaceOverviewOut, WorkspaceUpdate
+from app.services.workspace_overview import get_workspace_overview
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -38,6 +39,11 @@ def get_workspace(workspace_id: str, db: Session = Depends(get_db)):
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return ws
+
+
+@router.get("/{workspace_id}/overview", response_model=WorkspaceOverviewOut)
+def workspace_overview(workspace_id: str, db: Session = Depends(get_db)):
+    return get_workspace_overview(db, workspace_id)
 
 
 @router.patch("/{workspace_id}", response_model=WorkspaceOut)

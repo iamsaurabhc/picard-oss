@@ -8,9 +8,11 @@ import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell } from "@/components/PageShell";
 import { picardApi } from "@/lib/picardApi";
+import { useWorkspace } from "@/lib/workspaceContext";
 
 export default function WorkspacesPage() {
   const qc = useQueryClient();
+  const { setWorkspaceId } = useWorkspace();
   const [name, setName] = useState("");
   const { data: workspaces = [], isLoading } = useQuery({
     queryKey: ["workspaces"],
@@ -18,15 +20,19 @@ export default function WorkspacesPage() {
   });
   const create = useMutation({
     mutationFn: () => picardApi.createWorkspace({ name }),
-    onSuccess: () => {
+    onSuccess: (ws) => {
       setName("");
+      setWorkspaceId(ws.id);
       qc.invalidateQueries({ queryKey: ["workspaces"] });
     },
   });
 
   return (
     <PageShell maxWidth="3xl">
-      <PageHeader title="Workspaces" />
+      <PageHeader
+        title="Manage workspaces"
+        subtitle="Create matters and switch the active workspace from the sidebar selector."
+      />
       <div className="mb-8 flex gap-2">
         <Input placeholder="Matter name" value={name} onChange={(e) => setName(e.target.value)} />
         <Button disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
@@ -40,7 +46,11 @@ export default function WorkspacesPage() {
           {workspaces.map((ws) => (
             <li key={ws.id} className="flex items-center justify-between px-4 py-3">
               <div>
-                <Link href={`/workspaces/${ws.id}`} className="font-medium hover:underline">
+                <Link
+                  href="/"
+                  className="font-medium hover:underline"
+                  onClick={() => setWorkspaceId(ws.id)}
+                >
                   {ws.name}
                 </Link>
                 {ws.matter_ref ? <p className="text-xs text-neutral-500">CM: {ws.matter_ref}</p> : null}

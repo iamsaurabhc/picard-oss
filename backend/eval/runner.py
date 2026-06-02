@@ -34,14 +34,18 @@ def run_gold_label(db: Session, label: dict) -> dict:
     elif label.get("mode") == "SIMPLE":
         retrieval_mode = "simple"
 
+    doc_ids = [label["document_id"]] if label.get("document_id") else None
+    query_text = label.get("query") or ""
+    if label.get("diagnostic_query") and label.get("query_style") == "diagnostic":
+        query_text = label["query"]
+
     understanding = understand_query(
-        label["query"],
+        query_text,
         retrieval_mode=retrieval_mode,
         db=db,
         workspace_id=label["workspace_id"],
         document_ids=doc_ids,
     )
-    doc_ids = [label["document_id"]] if label.get("document_id") else None
 
     if understanding.intent == "case_overview":
         pool_hits, overview_diag = overview_retrieve(

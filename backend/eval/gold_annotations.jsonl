@@ -1,0 +1,4 @@
+{"fact_id": "chester_damages_1000", "document_id": "b65e3196-7199-446e-a910-6476d23b7bc8", "page_numbers": [3], "chunk_ids": ["d4ae199c-81ce-4dd8-82ab-3932898a5576"], "entity_types": ["amount", "party"], "verbatim_span": "The plaintiff claimed damages in the sum of £1,000."}
+{"fact_id": "chester_infant_identity", "document_id": "b65e3196-7199-446e-a910-6476d23b7bc8", "page_numbers": [1, 2], "chunk_ids": [], "entity_types": ["party"], "verbatim_span": "infant son of the plaintiff"}
+{"fact_id": "chester_accident_date", "document_id": "b65e3196-7199-446e-a910-6476d23b7bc8", "page_numbers": [1, 6], "chunk_ids": [], "entity_types": ["date"], "verbatim_span": null}
+{"fact_id": "chester_parties_caption", "document_id": "b65e3196-7199-446e-a910-6476d23b7bc8", "page_numbers": [2], "chunk_ids": [], "entity_types": ["party"], "verbatim_span": null}

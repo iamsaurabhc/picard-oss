@@ -148,6 +148,19 @@ def _planned_search(
             suggestions=["Try different keywords.", "Broaden document scope."],
         )
 
+    if settings.enable_context_expansion and hits:
+        from app.services.context_coverage import expand_context_hits, max_chunks_for_intent
+
+        max_chunks = max_chunks_for_intent(understanding.intent, top_k=body.top_k)
+        hits, expand_diag = expand_context_hits(
+            db,
+            hits,
+            bundles=None,
+            max_chunks=max_chunks,
+            max_per_page=config.max_per_page,
+        )
+        diag = {**diag, **expand_diag}
+
     return SearchResponse(
         mode="SIMPLE",
         hits=hits,
@@ -217,29 +230,44 @@ def execute_search(
         if not carp_result.refused:
             from app.services.fts_search import parse_bbox
 
+            carp_hits = [
+                SearchHit(
+                    chunk_id=h.chunk_id,
+                    document_id=h.document_id,
+                    page_number=h.page_number,
+                    text_content=h.text_content,
+                    heading_path=h.heading_path,
+                    section_key=h.section_key,
+                    bbox=parse_bbox(h.bbox_json),
+                    score=h.score,
+                )
+                for h in carp_result.chunks
+            ]
+            carp_bundles = [_bundle_to_schema(b) for b in carp_result.bundles]
+            carp_diag = {
+                **diagnostics,
+                **(carp_result.retrieval_diagnostics or {}),
+                "retrieval_path": ["carp"],
+            }
+            if settings.enable_context_expansion and carp_hits:
+                from app.services.context_coverage import expand_context_hits, max_chunks_for_intent
+
+                max_chunks = max_chunks_for_intent(understanding.intent, top_k=body.top_k)
+                carp_hits, expand_diag = expand_context_hits(
+                    db,
+                    carp_hits,
+                    bundles=carp_bundles,
+                    max_chunks=max_chunks,
+                )
+                carp_diag = {**carp_diag, **expand_diag}
+
             return SearchResponse(
                 mode="MULTI_CONSTRAINT",
-                hits=[
-                    SearchHit(
-                        chunk_id=h.chunk_id,
-                        document_id=h.document_id,
-                        page_number=h.page_number,
-                        text_content=h.text_content,
-                        heading_path=h.heading_path,
-                        section_key=h.section_key,
-                        bbox=parse_bbox(h.bbox_json),
-                        score=h.score,
-                    )
-                    for h in carp_result.chunks
-                ],
-                bundles=[_bundle_to_schema(b) for b in carp_result.bundles],
+                hits=carp_hits,
+                bundles=carp_bundles,
                 refused=False,
                 proximity_tier_used=carp_result.proximity_tier_used,
-                retrieval_diagnostics={
-                    **diagnostics,
-                    **(carp_result.retrieval_diagnostics or {}),
-                    "retrieval_path": ["carp"],
-                },
+                retrieval_diagnostics=carp_diag,
                 suggestions=carp_result.suggestions,
                 expanded_query=fts_match,
             )

@@ -23,6 +23,33 @@ class WorkspaceOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WorkspaceDocumentCountsOut(BaseModel):
+    total: int = 0
+    done: int = 0
+    pending: int = 0
+    parsing: int = 0
+    error: int = 0
+
+
+class PartyHighlightOut(BaseModel):
+    display_value: str
+    document_count: int
+
+
+class DocTypeCountOut(BaseModel):
+    doc_type: str
+    count: int
+
+
+class WorkspaceOverviewOut(BaseModel):
+    workspace: WorkspaceOut
+    documents: WorkspaceDocumentCountsOut
+    tabular_reviews: int
+    parties: list[PartyHighlightOut] = Field(default_factory=list)
+    doc_types: list[DocTypeCountOut] = Field(default_factory=list)
+    recent_documents: list["DocumentOut"] = Field(default_factory=list)
+
+
 class DocumentOut(BaseModel):
     id: str
     workspace_id: str

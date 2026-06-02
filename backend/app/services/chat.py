@@ -21,6 +21,7 @@ from app.services.citations import (
     references_for_api,
     validate_response,
 )
+from app.services.context_coverage import apply_context_coverage
 from app.services.context_ranker import rank_context
 from app.services.model_router import ModelRole, stream_completion
 from app.services.entity_listing_retrieval import entity_listing_retrieve_with_progress
@@ -372,8 +373,27 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         top_k=top_k,
         rank_mode=rank_mode,  # type: ignore[arg-type]
     )
-    hits = ranked_hits
     retrieval_diagnostics.update(rank_diagnostics)
+
+    yield emitter.progress("coverage", "start")
+    hits, coverage_diag = apply_context_coverage(
+        db,
+        ranked_hits,
+        understanding,
+        query=body.message,
+        workspace_id=body.workspace_id,
+        document_ids=scoped_document_ids or body.document_ids,
+        bundles=bundles,
+        top_k=top_k,
+        rank_diagnostics=rank_diagnostics,
+    )
+    retrieval_diagnostics.update(coverage_diag)
+    yield emitter.progress(
+        "coverage",
+        "done",
+        chunk_count=len(hits),
+        gaps_filled=coverage_diag.get("coverage_report", {}).get("gaps_filled", []),
+    )
     retrieval_diagnostics["pages_in_context"] = sorted({h.page_number for h in hits})
     retrieval_diagnostics["documents_in_context"] = sorted({h.document_id for h in hits})
     # #region agent log
@@ -452,6 +472,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         excerpt_chars = 400
     doc_names = get_document_names(db, list({h.document_id for h in hits}))
     emitter.update_doc_names(doc_names)
+    coverage_report = retrieval_diagnostics.get("coverage_report") or {}
     citation_map = build_citation_map(
         hits,
         bundles,
@@ -463,6 +484,8 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         prefer_listing=is_listing,
         intent=understanding.intent,
         coverage_goal=understanding.coverage_goal,
+        db=db,
+        workspace_id=body.workspace_id,
     )
     # #region agent log
     chunks_by_doc: dict[str, list[dict]] = {}
@@ -519,6 +542,8 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         intent=understanding.intent,
         sub_questions=understanding.sub_questions,
         target_entity=target_entity,
+        sub_question_coverage=coverage_report.get("sub_question_coverage"),
+        coverage_goal=understanding.coverage_goal,
     )
     if body.tabular_review_id:
         from app.services.tabular import build_tabular_chat_context

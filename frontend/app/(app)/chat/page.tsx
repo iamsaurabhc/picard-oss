@@ -10,8 +10,9 @@ import {
 } from "@/lib/picardApi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { FormSelect } from "@/components/FormSelect";
 import { DocumentMultiSelect } from "@/components/DocumentMultiSelect";
+import { useWorkspace } from "@/lib/workspaceContext";
+import { NoWorkspaceState } from "@/components/NoWorkspaceState";
 import { MarkdownWithCitations } from "@/components/MarkdownWithCitations";
 import { RetrievalActivityPanel } from "@/components/chat/RetrievalActivityPanel";
 import { useRetrievalActivity } from "@/components/chat/useRetrievalActivity";
@@ -47,7 +48,7 @@ function upsertAssistantMessage(
 }
 
 export default function ChatPage() {
-  const [workspaceId, setWorkspaceId] = useState("");
+  const { workspaceId: ws, isLoading: wsLoading } = useWorkspace();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [documentIds, setDocumentIds] = useState<string[]>([]);
   const [input, setInput] = useState("");
@@ -59,18 +60,20 @@ export default function ChatPage() {
   const streamingRef = useRef(false);
   const activity = useRetrievalActivity();
 
-  const { data: workspaces } = useQuery({
-    queryKey: ["workspaces"],
-    queryFn: picardApi.listWorkspaces,
-  });
-
-  const ws = workspaceId || workspaces?.[0]?.id || "";
-
   const { data: documents } = useQuery({
     queryKey: ["documents", ws],
-    queryFn: () => picardApi.listDocuments(ws),
+    queryFn: () => picardApi.listDocuments(ws!),
     enabled: !!ws,
   });
+
+  useEffect(() => {
+    setSessionId(null);
+    setDocumentIds([]);
+    setPdfDocId(null);
+    setActiveRef(null);
+    setActiveMessageRefs(null);
+    activity.reset();
+  }, [ws]);
 
   useEffect(() => {
     if (!ws || sessionId) return;
@@ -169,6 +172,22 @@ export default function ChatPage() {
 
   const showPdfPanel = pdfDocId != null && activeRef != null;
 
+  if (wsLoading) {
+    return (
+      <div className="flex h-[calc(100vh)] items-center justify-center text-sm text-neutral-500">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!ws) {
+    return (
+      <div className="flex h-[calc(100vh)] items-center justify-center p-8">
+        <NoWorkspaceState title="Select a workspace for Chat" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100vh)] flex-col">
       <header className="flex flex-wrap items-center gap-3 border-b border-neutral-200 bg-white px-4 py-3">
@@ -178,25 +197,6 @@ export default function ChatPage() {
         >
           Chat
         </h1>
-        <FormSelect
-          className="shrink-0"
-          value={ws}
-          onChange={(e) => {
-            setWorkspaceId(e.target.value);
-            setSessionId(null);
-            setDocumentIds([]);
-            setPdfDocId(null);
-            setActiveRef(null);
-            setActiveMessageRefs(null);
-            activity.reset();
-          }}
-        >
-          {(workspaces ?? []).map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name}
-            </option>
-          ))}
-        </FormSelect>
         <DocumentMultiSelect
           documents={(documents ?? []).map((d) => ({ id: d.id, file_name: d.file_name }))}
           selectedIds={documentIds}

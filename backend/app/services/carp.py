@@ -29,6 +29,8 @@ TIER_SCORES = {
     "ADJACENT_PAGE": 0.40,
 }
 
+_MAX_PAGE_CHUNKS_PER_SECTION = 6
+
 
 @dataclass
 class ContextBundle:
@@ -181,6 +183,14 @@ def _assemble_bundles(
         for hit in fts_hits:
             key = (hit.document_id, hit.page_number, hit.section_key)
             by_page_section.setdefault(key, []).append(hit)
+        for (doc_id, page, section_key), hits in list(by_page_section.items()):
+            merged: dict[str, FtsHit] = {h.chunk_id: h for h in hits}
+            for page_hit in _load_page_chunks(db, doc_id, page):
+                if section_key is not None and page_hit.section_key != section_key:
+                    continue
+                merged.setdefault(page_hit.chunk_id, page_hit)
+            capped = sorted(merged.values(), key=lambda h: h.score)[:_MAX_PAGE_CHUNKS_PER_SECTION]
+            by_page_section[(doc_id, page, section_key)] = capped
     else:
         for doc_id, page in pages:
             for hit in _load_page_chunks(db, doc_id, page):
