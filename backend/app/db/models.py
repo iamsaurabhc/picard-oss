@@ -123,6 +123,37 @@ class ChatMessage(Base):
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
 
 
+class TabularReview(Base):
+    __tablename__ = "tabular_reviews"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String, ForeignKey("workspaces.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    columns_config_json: Mapped[str] = mapped_column(Text, nullable=False)
+    document_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    cells: Mapped[list["TabularCell"]] = relationship(back_populates="review", cascade="all, delete-orphan")
+
+
+class TabularCell(Base):
+    __tablename__ = "tabular_cells"
+    __table_args__ = (UniqueConstraint("review_id", "document_id", "column_key"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    review_id: Mapped[str] = mapped_column(String, ForeignKey("tabular_reviews.id", ondelete="CASCADE"))
+    document_id: Mapped[str] = mapped_column(String, ForeignKey("documents.id", ondelete="CASCADE"))
+    column_key: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flag: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    source_chunk_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    review: Mapped["TabularReview"] = relationship(back_populates="cells")
+    document: Mapped["Document"] = relationship()
+
+
 class Job(Base):
     __tablename__ = "jobs"
 

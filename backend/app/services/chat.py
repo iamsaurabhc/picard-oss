@@ -520,6 +520,14 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         sub_questions=understanding.sub_questions,
         target_entity=target_entity,
     )
+    if body.tabular_review_id:
+        from app.services.tabular import build_tabular_chat_context
+
+        from app.services.citations import TABULAR_CELL_CITE_HINT
+
+        tabular_ctx = build_tabular_chat_context(db, body.tabular_review_id)
+        if tabular_ctx:
+            system_prompt = f"{tabular_ctx}\n\n{TABULAR_CELL_CITE_HINT}\n\n{system_prompt}"
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": body.message},

@@ -132,7 +132,67 @@ export type ChatStreamRequest = {
   retrieval_mode?: "auto" | "simple" | "multi_constraint";
   allow_partial_disclosure?: boolean;
   top_k?: number;
+  tabular_review_id?: string;
 };
+
+export type ColumnFormat =
+  | "text"
+  | "bulleted_list"
+  | "number"
+  | "currency"
+  | "yes_no"
+  | "date"
+  | "tag"
+  | "percentage"
+  | "monetary_amount";
+
+export type TabularColumn = {
+  key: string;
+  label: string;
+  format: ColumnFormat;
+  prompt: string;
+  tag_options?: string[];
+};
+
+export type TabularCell = {
+  id: string;
+  review_id: string;
+  document_id: string;
+  column_key: string;
+  summary: string | null;
+  reasoning: string | null;
+  flag: "green" | "grey" | "yellow" | "red" | null;
+  status: "pending" | "generating" | "done" | "error";
+  source_chunk_ids: string[];
+};
+
+export type TabularReviewSummary = {
+  id: string;
+  workspace_id: string;
+  title: string;
+  column_count: number;
+  document_count: number;
+  created_at: string;
+};
+
+export type TabularReview = {
+  id: string;
+  workspace_id: string;
+  title: string;
+  columns: TabularColumn[];
+  document_ids: string[];
+  documents: DocumentRecord[];
+  cells: TabularCell[];
+  created_at: string;
+};
+
+export type TabularStreamEvent =
+  | { event: "batch_start"; review_id: string; total_cells: number }
+  | { event: "cell_start"; cell_id: string; document_id: string; column_key: string }
+  | { event: "cell_done"; cell: TabularCell }
+  | { event: "cell_error"; cell_id: string; error: string }
+  | { event: "batch_complete"; review_id: string; done: number; errors: number }
+  | { event: "error"; detail: string };
 
 export type ChatProgressPhase = "understanding" | "search" | "rank" | "generate";
 export type ChatProgressStatus = "start" | "done";
@@ -291,5 +351,83 @@ export const picardApi = {
     const reader = res.body?.getReader();
     if (!reader) return;
     yield* parseSseStream(reader, onEvent);
+  },
+  listTabularReviews: (workspaceId: string) =>
+    request<TabularReviewSummary[]>(`/workspaces/${workspaceId}/tabular/reviews`),
+  createTabularReview: (body: {
+    workspace_id: string;
+    title: string;
+    columns: TabularColumn[];
+    document_ids: string[];
+  }) =>
+    request<TabularReview>("/tabular/reviews", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getTabularReview: (reviewId: string) => request<TabularReview>(`/tabular/reviews/${reviewId}`),
+  updateTabularReview: (
+    reviewId: string,
+    body: { title?: string; columns?: TabularColumn[]; document_ids?: string[] }
+  ) =>
+    request<TabularReview>(`/tabular/reviews/${reviewId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteTabularReview: (reviewId: string) =>
+    request<void>(`/tabular/reviews/${reviewId}`, { method: "DELETE" }),
+  generateColumnPrompt: (body: {
+    label: string;
+    format?: ColumnFormat;
+    idea?: string;
+  }) =>
+    request<{ prompt: string; from_preset: boolean; suggested_format: ColumnFormat }>(
+      "/tabular/generate-column-prompt",
+      {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  regenerateTabularCell: (cellId: string) =>
+    request<TabularCell>(`/tabular/cells/${cellId}/regenerate`, { method: "POST" }),
+  tabularExportUrl: (reviewId: string) => `${API_URL}/tabular/reviews/${reviewId}/export.xlsx`,
+  streamTabularGeneration: async function* (
+    reviewId: string,
+    body?: { document_ids?: string[]; column_keys?: string[]; only_pending?: boolean }
+  ): AsyncGenerator<TabularStreamEvent> {
+    const res = await fetch(`${API_URL}/tabular/reviews/${reviewId}/generate/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(body ?? { only_pending: true }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      const blocks = buffer.split("\n\n");
+      buffer = done ? "" : (blocks.pop() ?? "");
+      for (const block of blocks) {
+        let eventType = "message";
+        let data = "";
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) eventType = line.slice(6).trim();
+          else if (line.startsWith("data:")) data = line.slice(5).trim();
+        }
+        if (!data) continue;
+        try {
+          const parsed = JSON.parse(data) as Record<string, unknown>;
+          yield { event: eventType, ...parsed } as TabularStreamEvent;
+        } catch {
+          /* skip */
+        }
+      }
+      if (done) break;
+    }
   },
 };

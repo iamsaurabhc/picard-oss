@@ -1944,7 +1944,7 @@ interface WorkflowStep {
 | Phase 1 — Ingestion + entity v1 | Complete |
 | Phase 2 — FTS5 + CARP + eval harness | Complete |
 | **Phase 3 — Entity NER (EX-3) + citation chat** | **In progress** (EX-3 first, then §14.3.1–3.5) |
-| Phase 4 — Tabular review | Planned |
+| Phase 4 — Tabular review | Complete |
 | Phase 5 — OSS polish | Planned |
 | Phase 6 — Evidence-aware workflow library | Planned (post-v1) |
 | Phase 7 — Bounded agentic assistant | Planned (post-v1) |

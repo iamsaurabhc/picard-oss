@@ -121,6 +121,11 @@ def refuse_gate(hits: list[SearchHit], *, search_refused: bool = False) -> bool:
     return len(hits) == 0
 
 
+TABULAR_CELL_CITE_HINT = (
+    "When referencing a specific tabular cell, you may use [[cell:column_key:document_id]]."
+)
+
+
 def build_system_prompt(
     citation_map: CitationMap,
     *,

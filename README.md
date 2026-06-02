@@ -205,7 +205,7 @@ curl -s http://localhost:8000/health/ocr
 
 ---
 
-## What you get (Phases 0–3 complete)
+## What you get (Phases 0–4)
 
 
 | Phase                    | Status | Highlights                                                                        |
@@ -214,6 +214,7 @@ curl -s http://localhost:8000/health/ocr
 | **1 — Ingestion**        | ✅      | PDF upload → liteparse chunks + bbox, FTS5 index, entity index for CARP           |
 | **2 — Relevance engine** | ✅      | BM25 search, query understanding, CARP bundles, eval harness                      |
 | **3 — Citation chat**    | ✅      | Streaming Q&A, refuse gate, `[N]` pills → PDF highlight, hybrid entity extraction |
+| **4 — Tabular review**   | ✅      | Column presets, FTS5+LLM cells, SSE batch, flags, Excel export, review chat panel |
 
 ---
 

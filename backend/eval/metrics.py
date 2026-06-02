@@ -61,3 +61,10 @@ def tier_a_pass(scores: dict[str, float], thresholds: dict[str, float]) -> bool:
         if scores.get(key, 0) < threshold:
             return False
     return True
+
+
+def tb_cell_accuracy(correct: int, total: int) -> float:
+    """TB-01: fraction of pilot cells judged accurate (manual or gold labels)."""
+    if total == 0:
+        return 0.0
+    return correct / total

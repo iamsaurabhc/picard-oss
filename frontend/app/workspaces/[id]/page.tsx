@@ -86,6 +86,13 @@ export default function WorkspaceDetailPage() {
       <PageHeader
         title={workspace?.name ?? "Workspace"}
         subtitle="Upload PDFs for parsing and indexing. Digital PDFs skip OCR; scanned pages use PaddleOCR when available."
+        actions={
+          <Link href={`/workspaces/${workspaceId}/tabular`}>
+            <Button variant="outline" size="sm">
+              Tabular reviews
+            </Button>
+          </Link>
+        }
       />
 
       {ocrHealth ? (

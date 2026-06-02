@@ -144,3 +144,91 @@ class ChatStreamRequest(BaseModel):
     retrieval_mode: Literal["auto", "simple", "multi_constraint"] = "auto"
     allow_partial_disclosure: bool = False
     top_k: int = 12
+    tabular_review_id: str | None = None
+
+
+ColumnFormat = Literal[
+    "text",
+    "bulleted_list",
+    "number",
+    "currency",
+    "yes_no",
+    "date",
+    "tag",
+    "percentage",
+    "monetary_amount",
+]
+
+CellFlag = Literal["green", "grey", "yellow", "red"]
+CellStatus = Literal["pending", "generating", "done", "error"]
+
+
+class TabularColumn(BaseModel):
+    key: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    format: ColumnFormat = "text"
+    prompt: str = Field(min_length=1)
+    tag_options: list[str] | None = None
+
+
+class TabularReviewCreate(BaseModel):
+    workspace_id: str
+    title: str = Field(min_length=1, max_length=200)
+    columns: list[TabularColumn] = Field(min_length=1)
+    document_ids: list[str] = Field(min_length=1)
+
+
+class TabularReviewUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    columns: list[TabularColumn] | None = None
+    document_ids: list[str] | None = None
+
+
+class TabularCellOut(BaseModel):
+    id: str
+    review_id: str
+    document_id: str
+    column_key: str
+    summary: str | None = None
+    reasoning: str | None = None
+    flag: CellFlag | None = None
+    status: CellStatus
+    source_chunk_ids: list[str] = Field(default_factory=list)
+
+
+class TabularReviewSummary(BaseModel):
+    id: str
+    workspace_id: str
+    title: str
+    column_count: int
+    document_count: int
+    created_at: str
+
+
+class TabularReviewOut(BaseModel):
+    id: str
+    workspace_id: str
+    title: str
+    columns: list[TabularColumn]
+    document_ids: list[str]
+    documents: list[DocumentOut]
+    cells: list[TabularCellOut]
+    created_at: str
+
+
+class GenerateColumnPromptRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=200)
+    format: ColumnFormat | None = None
+    idea: str | None = Field(default=None, max_length=2000)
+
+
+class GenerateColumnPromptResponse(BaseModel):
+    prompt: str
+    from_preset: bool = False
+    suggested_format: ColumnFormat = "text"
+
+
+class TabularBatchGenerateRequest(BaseModel):
+    document_ids: list[str] | None = None
+    column_keys: list[str] | None = None
+    only_pending: bool = True

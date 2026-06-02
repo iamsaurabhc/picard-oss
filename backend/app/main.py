@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db.session import init_db
-from app.routers import chat, documents, search, workspaces
+from app.routers import chat, documents, search, tabular, workspaces
 from app.schemas import OcrHealthOut
 from app.services.ingestion import recover_stuck_parsing_documents
 from app.services.parse_plan import check_paddleocr_server
@@ -34,6 +34,7 @@ app.include_router(workspaces.router)
 app.include_router(documents.router)
 app.include_router(search.router)
 app.include_router(chat.router)
+app.include_router(tabular.router)
 
 
 @app.get("/health")
