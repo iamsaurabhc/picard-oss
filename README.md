@@ -6,6 +6,12 @@ Picard OSS is a **local-first legal document assistant** for legal engineers: a 
 
 No Supabase, Neo4j, or cloud object storage required — documents live under `.picard-data/` on your machine.
 
+## Demo
+
+![Picard OSS demo — workspace dashboard, Vault, tabular review, and citation-grounded chat](media/picard-oss-demo.gif)
+
+*~20s preview (first portion of the recording). Full screen capture: [`media/picard-oss-demo.mov`](media/picard-oss-demo.mov).*
+
 ---
 
 ## Contents
@@ -14,6 +20,7 @@ No Supabase, Neo4j, or cloud object storage required — documents live under `.
 - `[backend/](backend/)` — FastAPI API, liteparse ingestion, FTS5 + CARP, citation chat
 - `[scripts/](scripts/)` — `start.sh`, PaddleOCR sidecar, eval harness
 - `[docs/](docs/)` — Phase 2/3 evaluation guides
+- `[media/](media/)` — Demo GIF (README) and source screen recording
 - `[ARCHITECTURE.md](ARCHITECTURE.md)` — Full design blueprint
 - [Eval metrics & quality gates](#eval-metrics--quality-gates) — R/C/F/CT/FG/AB IDs (CI + per-answer UI roadmap)
 

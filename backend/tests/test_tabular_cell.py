@@ -5,7 +5,7 @@ import pytest
 from app.db.models import Chunk, Document, Entity, EntityMention, MetadataTag, TabularCell, TabularReview, Workspace
 from app.db.session import utc_now_iso
 from app.services.fts_search import FtsHit
-from app.services.tabular_extractor import TabularCellExtraction, extract_cell
+from app.services.tabular_extractor import TabularCellExtraction, _parse_llm_json, extract_cell
 from app.schemas import TabularColumn
 
 
@@ -301,3 +301,22 @@ def test_export_strips_citations(client, db_session, tabular_fixture):
     joined = " ".join(str(v) for v in values if v)
     assert "[[" not in joined
     assert "New York" in joined
+
+
+def test_parse_llm_json_coerces_list_summary_to_bullets():
+    raw = json.dumps(
+        {
+            "summary": [
+                "Google LLC: Opposite Party",
+                "Informant-1: Informant",
+            ],
+            "reasoning": "From caption.",
+            "chunk_ids": ["abc-123"],
+            "flag": "green",
+        }
+    )
+    parsed = _parse_llm_json(raw)
+    assert parsed is not None
+    assert "Google LLC" in parsed.summary
+    assert parsed.summary.startswith("- ")
+    assert "\n" in parsed.summary

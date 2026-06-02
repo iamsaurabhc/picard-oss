@@ -82,6 +82,35 @@ def _embed_citations(summary: str, chunk_ids: list[str], hits_by_id: dict[str, F
     return f"{summary} {' '.join(markers)}".strip()
 
 
+def _coerce_summary(value: object) -> str:
+    """LLMs often return bulleted_list summaries as JSON arrays instead of a string."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        lines: list[str] = []
+        for item in value:
+            s = str(item).strip()
+            if not s:
+                continue
+            lines.append(s if s.startswith("-") else f"- {s}")
+        return "\n".join(lines)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value).strip()
+
+
+def _normalize_extraction_payload(data: dict) -> dict:
+    out = dict(data)
+    if "summary" in out:
+        out["summary"] = _coerce_summary(out["summary"])
+    if "reasoning" in out and not isinstance(out.get("reasoning"), str):
+        out["reasoning"] = str(out["reasoning"])
+    chunk_ids = out.get("chunk_ids")
+    if isinstance(chunk_ids, list):
+        out["chunk_ids"] = [str(cid) for cid in chunk_ids if cid]
+    return out
+
+
 def _parse_llm_json(raw: str | None) -> TabularCellExtraction | None:
     if not raw:
         return None
@@ -91,8 +120,13 @@ def _parse_llm_json(raw: str | None) -> TabularCellExtraction | None:
         text = re.sub(r"\s*```$", "", text)
     try:
         data = json.loads(text)
-        return TabularCellExtraction.model_validate(data)
-    except (json.JSONDecodeError, ValidationError) as exc:
+        if not isinstance(data, dict):
+            return None
+        return TabularCellExtraction.model_validate(_normalize_extraction_payload(data))
+    except json.JSONDecodeError as exc:
+        logger.warning("tabular JSON parse failed: %s", exc)
+        return None
+    except ValidationError as exc:
         logger.warning("tabular JSON parse failed: %s", exc)
         return None
 
