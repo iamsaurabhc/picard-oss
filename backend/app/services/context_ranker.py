@@ -7,7 +7,7 @@ from typing import Literal
 
 from app.config import settings
 from app.schemas import SearchHit
-from app.services.excerpt_selector import has_identity_signal, identity_signal_strength
+from app.services.excerpt_selector import has_amount_signal, has_identity_signal, identity_signal_strength
 from app.services.fts_search import _chunk_is_informative
 from app.services.model_router import ModelRole, completion
 from app.services.query_understanding import QueryUnderstanding, SearchPass, SubQuestion
@@ -120,6 +120,7 @@ def _coverage_guardrails(
     top_k: int,
     search_passes: list[SearchPass] | None = None,
     sub_questions: list[SubQuestion] | None = None,
+    prefer_amounts: bool = False,
 ) -> list[SearchHit]:
     """Structural diversity guardrails replacing keyword facet buckets."""
     max_per_page = 2
@@ -142,6 +143,30 @@ def _coverage_guardrails(
         key = (h.document_id, h.page_number)
         per_page[key] = per_page.get(key, 0) + 1
 
+    def _make_room_on_page(h: SearchHit) -> None:
+        """Evict a weak same-page chunk so amount evidence can be pinned."""
+        key = (h.document_id, h.page_number)
+        evict_idx: int | None = None
+        for i, x in enumerate(selected):
+            if (x.document_id, x.page_number) != key:
+                continue
+            if not has_amount_signal(x.text_content) or len((x.text_content or "").strip()) < 40:
+                evict_idx = i
+                break
+        if evict_idx is None:
+            for i, x in enumerate(selected):
+                if (x.document_id, x.page_number) == key:
+                    evict_idx = i
+                    break
+        if evict_idx is None:
+            return
+        old = selected.pop(evict_idx)
+        seen.discard(old.chunk_id)
+        old_key = (old.document_id, old.page_number)
+        per_page[old_key] = per_page.get(old_key, 1) - 1
+        if per_page.get(old_key, 0) <= 0:
+            per_page.pop(old_key, None)
+
     # Start with LLM-ranked order
     for h in ranked:
         _add(h)
@@ -160,6 +185,21 @@ def _coverage_guardrails(
             if h.chunk_id not in seen:
                 _add(h, front=True)
                 break
+
+    if prefer_amounts:
+        amount_hits = [h for h in pool if has_amount_signal(h.text_content)]
+        amount_hits.sort(
+            key=lambda x: (
+                x.score,
+                0 if "£" in (x.text_content or "") or "sum of" in (x.text_content or "").casefold() else 1,
+            ),
+        )
+        for h in amount_hits[:3]:
+            if h.chunk_id in seen:
+                continue
+            if not _can_add(h):
+                _make_room_on_page(h)
+            _add(h, front=True)
 
     # Pass coverage: at least one chunk per search pass that had hits
     pass_hits = _pass_labels_with_hits(pool, search_passes or [])
@@ -213,10 +253,34 @@ def _coverage_guardrails(
     deduped: list[SearchHit] = []
     for h in selected:
         if any(_jaccard(h.text_content or "", kept.text_content or "") > 0.7 for kept in deduped):
-            continue
+            if prefer_amounts and has_amount_signal(h.text_content):
+                pass
+            else:
+                continue
         deduped.append(h)
 
     return deduped[:top_k]
+
+
+def _pass_hits_for_document(
+    pool: list[SearchHit],
+    passes: list[SearchPass],
+    document_id: str,
+) -> dict[str, list[SearchHit]]:
+    """Map planner pass labels to hits in one document whose text matches pass terms."""
+    doc_hits = [h for h in pool if h.document_id == document_id]
+    result: dict[str, list[SearchHit]] = {}
+    for sp in passes:
+        terms = [t.casefold() for t in sp.fts_terms if t]
+        if not terms:
+            continue
+        matched = [
+            h for h in doc_hits
+            if any(t in (h.text_content or "").casefold() for t in terms)
+        ]
+        if matched:
+            result[sp.label] = matched
+    return result
 
 
 def _listing_document_guardrails(
@@ -225,6 +289,7 @@ def _listing_document_guardrails(
     *,
     top_k: int,
     min_distinct_documents: int | None = None,
+    search_passes: list[SearchPass] | None = None,
 ) -> list[SearchHit]:
     """Ensure at least one chunk per discovered document before filling by BM25."""
     max_per_doc = settings.chat_listing_chunks_per_doc
@@ -235,10 +300,13 @@ def _listing_document_guardrails(
     def _can_add(h: SearchHit) -> bool:
         return per_doc.get(h.document_id, 0) < max_per_doc
 
-    def _add(h: SearchHit) -> None:
+    def _add(h: SearchHit, *, front: bool = False) -> None:
         if h.chunk_id in seen or not _can_add(h):
             return
-        selected.append(h)
+        if front:
+            selected.insert(0, h)
+        else:
+            selected.append(h)
         seen.add(h.chunk_id)
         per_doc[h.document_id] = per_doc.get(h.document_id, 0) + 1
 
@@ -251,6 +319,23 @@ def _listing_document_guardrails(
     by_doc: dict[str, list[SearchHit]] = {}
     for h in pool:
         by_doc.setdefault(h.document_id, []).append(h)
+
+    for doc_id in doc_ids:
+        pass_hits = _pass_hits_for_document(pool, search_passes or [], doc_id)
+        covered_labels = set()
+        for h in selected:
+            if h.document_id != doc_id:
+                continue
+            for label, hits in pass_hits.items():
+                if h.chunk_id in {x.chunk_id for x in hits}:
+                    covered_labels.add(label)
+        for label, hits in pass_hits.items():
+            if label in covered_labels:
+                continue
+            for h in sorted(hits, key=lambda x: x.score):
+                if h.chunk_id not in seen:
+                    _add(h)
+                    break
 
     for doc_id in doc_ids:
         if sum(1 for h in selected if h.document_id == doc_id) >= 1:
@@ -302,10 +387,14 @@ def rank_context(
     if not hits:
         return [], {"ranked_count": 0, "dropped_count": 0, "used_llm": False}
 
+    prefer_amounts = understanding.intent == "case_overview"
+
     if not settings.enable_context_ranker:
         ranked, diag = _fallback_rank(hits, top_k=top_k)
         if rank_mode == "listing" or understanding.intent == "entity_matter_listing":
-            ranked = _listing_document_guardrails(ranked, hits, top_k=top_k)
+            ranked = _listing_document_guardrails(
+                ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
+            )
             diag["rank_mode"] = "listing"
             diag["distinct_documents"] = len({h.document_id for h in ranked})
             diag["ranked_count"] = len(ranked)
@@ -317,6 +406,7 @@ def rank_context(
             ranked = _coverage_guardrails(
                 ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
                 sub_questions=understanding.sub_questions,
+                prefer_amounts=prefer_amounts,
             )
             diag["rank_mode"] = rank_mode
             diag["ranked_count"] = len(ranked)
@@ -353,12 +443,15 @@ def rank_context(
     if not raw:
         ranked, diag = _fallback_rank(hits, top_k=top_k)
         if rank_mode == "listing":
-            ranked = _listing_document_guardrails(ranked, hits, top_k=top_k)
+            ranked = _listing_document_guardrails(
+                ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
+            )
             diag["rank_mode"] = "listing"
         elif rank_mode == "coverage":
             ranked = _coverage_guardrails(
                 ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
                 sub_questions=understanding.sub_questions,
+                prefer_amounts=prefer_amounts,
             )
             diag["rank_mode"] = "coverage"
         if rank_mode in {"coverage", "listing"}:
@@ -377,13 +470,16 @@ def rank_context(
         logger.warning("context ranker parse failed: %s", exc)
         ranked, diag = _fallback_rank(hits, top_k=top_k)
         if rank_mode == "listing":
-            ranked = _listing_document_guardrails(ranked, hits, top_k=top_k)
+            ranked = _listing_document_guardrails(
+                ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
+            )
             diag["rank_mode"] = "listing"
             diag["distinct_documents"] = len({h.document_id for h in ranked})
         elif rank_mode == "coverage":
             ranked = _coverage_guardrails(
                 ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
                 sub_questions=understanding.sub_questions,
+                prefer_amounts=prefer_amounts,
             )
             diag["rank_mode"] = "coverage"
         if rank_mode in {"coverage", "listing"}:
@@ -407,13 +503,16 @@ def rank_context(
     if not ranked:
         ranked, diag = _fallback_rank(hits, top_k=top_k)
         if rank_mode == "listing":
-            ranked = _listing_document_guardrails(ranked, hits, top_k=top_k)
+            ranked = _listing_document_guardrails(
+                ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
+            )
             diag["rank_mode"] = "listing"
             diag["distinct_documents"] = len({h.document_id for h in ranked})
         elif rank_mode == "coverage":
             ranked = _coverage_guardrails(
                 ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
                 sub_questions=understanding.sub_questions,
+                prefer_amounts=prefer_amounts,
             )
             diag["rank_mode"] = "coverage"
         if rank_mode in {"coverage", "listing"}:
@@ -421,11 +520,14 @@ def rank_context(
         return ranked, diag
 
     if rank_mode == "listing":
-        ranked = _listing_document_guardrails(ranked, hits, top_k=top_k)
+        ranked = _listing_document_guardrails(
+            ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
+        )
     elif rank_mode == "coverage":
         ranked = _coverage_guardrails(
             ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
             sub_questions=understanding.sub_questions,
+            prefer_amounts=prefer_amounts,
         )
     elif (
         rank_mode == "precision"
@@ -435,6 +537,7 @@ def rank_context(
         ranked = _coverage_guardrails(
             ranked, hits, top_k=top_k, search_passes=understanding.search_passes,
             sub_questions=understanding.sub_questions,
+            prefer_amounts=prefer_amounts,
         )
     else:
         ranked = ranked[:top_k]

@@ -87,7 +87,11 @@ function phaseLabel(ev: Extract<ChatStreamEvent, { event: "progress" }>): string
 }
 
 function phaseStepId(ev: Extract<ChatStreamEvent, { event: "progress" }>): string {
-  return `${ev.phase}:${ev.label ?? "default"}:${ev.status}`;
+  const base = `${ev.phase}:${ev.label ?? "default"}:${ev.status}`;
+  if (ev.label === "per_document" && ev.document_id) {
+    return `${base}:${ev.document_id}`;
+  }
+  return base;
 }
 
 export function useRetrievalActivity() {
@@ -129,6 +133,29 @@ export function useRetrievalActivity() {
       const id = phaseStepId(ev);
       const label = phaseLabel(ev);
       setSteps((prev) => {
+        // #region agent log
+        if (ev.label === "per_document") {
+          const dupCount = prev.filter((s) => s.kind === "phase" && s.id === id).length;
+          fetch("http://127.0.0.1:7942/ingest/fc646775-8de3-41b6-b910-39cf0cc7992b", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "755b1b" },
+            body: JSON.stringify({
+              sessionId: "755b1b",
+              location: "useRetrievalActivity.ts:setSteps",
+              message: "per_document progress event",
+              data: {
+                id,
+                status: ev.status,
+                document_id: ev.document_id,
+                document_name: ev.document_name,
+                existingDupCount: dupCount,
+              },
+              timestamp: Date.now(),
+              hypothesisId: "H1",
+            }),
+          }).catch(() => {});
+        }
+        // #endregion
         if (ev.status === "start") {
           const withoutDup = prev.filter((s) => !(s.kind === "phase" && s.id === id));
           return [

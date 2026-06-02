@@ -162,6 +162,7 @@ Rules:
 - For compound questions (multiple ? or distinct sub-topics): emit one sub_question AND one search_pass per sub-part.
 - Each search_pass uses exactly 2 FTS terms (AND by default). Never use question-framing words as terms (name, date, what, when, who, how, age).
 - Use entity_matter_listing when the user wants all cases/matters against or involving a named party (e.g. list all cases against Google LLC). Set target_entity with canonical (lowercase) and surfaces.
+- For entity_matter_listing: emit 4–6 search_passes for distinct per-document dimensions the user needs (parties/counterparties, filing/allegations, forum/statute, outcome/stage). Derive every fts_term from document context previews, parties, entities, or headings — never generic placeholders.
 - Use case_overview when the user wants a broad summary of one named case (X v Y, list all case details involving a single matter). target_entity should be null.
 - Emit a party constraint matching target_entity when intent is entity_matter_listing.
 - For case_overview: emit 4–8 search_passes for distinct dimensions visible in this document.
@@ -570,6 +571,18 @@ def _apply_listing_fields(
             query, understanding.intent, None,
         )
     return understanding
+
+
+def _needs_overview_pass_expansion(passes: list[SearchPass]) -> bool:
+    return len(passes) < 4
+
+
+def _needs_listing_pass_expansion(passes: list[SearchPass]) -> bool:
+    if len(passes) >= 3:
+        return False
+    if len(passes) == 1 and passes[0].label in {"entity_anchor", "anchor", "fallback"}:
+        return True
+    return len(passes) < 3
 
 
 def _apply_overview_fields(understanding: QueryUnderstanding, query: str) -> QueryUnderstanding:
@@ -1084,21 +1097,50 @@ def understand_query(
     )
 
     if (
-        understanding.intent != "entity_matter_listing"
-        and
         db is not None
         and workspace_id
         and understanding.search_passes
         and settings.query_planner_repair_on_zero_hits
     ):
-        from app.services.query_planner_validation import validate_search_passes
+        from app.services.query_planner_validation import (
+            expand_listing_passes,
+            expand_overview_passes,
+            validate_search_passes,
+        )
+
+        if understanding.intent == "entity_matter_listing" and _needs_listing_pass_expansion(
+            understanding.search_passes
+        ):
+            understanding.search_passes = expand_listing_passes(
+                understanding.search_passes,
+                query=query,
+                document_context=document_context,
+            )
+        elif understanding.intent == "case_overview" and _needs_overview_pass_expansion(
+            understanding.search_passes
+        ):
+            understanding.search_passes = expand_overview_passes(
+                understanding.search_passes,
+                query=query,
+                document_context=document_context,
+            )
+
+        scope_ids = document_ids
+        if understanding.intent == "case_overview":
+            case_terms = _case_name_terms(query) or understanding.fts.must_terms[:2]
+            if case_terms and db is not None and workspace_id:
+                from app.services.case_scoping import resolve_case_document_ids
+
+                scope_ids = resolve_case_document_ids(
+                    db, workspace_id, case_terms, document_ids,
+                ) or document_ids
 
         repaired, repair_log = validate_search_passes(
             db,
             understanding.search_passes,
             query=query,
             workspace_id=workspace_id,
-            document_ids=document_ids,
+            document_ids=scope_ids,
             document_context=document_context,
         )
         understanding.search_passes = repaired

@@ -21,6 +21,10 @@ _FACT_HINT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_AMOUNT_HINT_RE = re.compile(
+    r"(?:£|\$|€|\b\d{1,3}(?:,\d{3})+\b|\b\d+\s*(?:pounds?|gbp|usd)\b|damages?\s+(?:in\s+the\s+sum|of|claimed|sought))",
+    re.IGNORECASE,
+)
 _PROPER_NAME_RE = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b")
 _IDENTITY_PHRASE_RE = re.compile(
     r"infant\s+son\s+of|son\s+of\s+the\s+plaintiff|the\s+plaintiff'?s\s+son",
@@ -39,6 +43,15 @@ _CITATION_HEADER_RE = re.compile(
     r"^\s*(?:v\.|appeal\s+from|council\s+of|^\[\d+\])",
     re.IGNORECASE,
 )
+_LISTING_SUBSTANCE_RE = re.compile(
+    r"information (?:has been |was )?filed|informants? (?:have |has )?filed|"
+    r"alleged|contravention|abuse of dominant|provisions of section",
+    re.IGNORECASE,
+)
+_LISTING_CAPTION_RE = re.compile(
+    r"opposite party|party no\.?|\bop\b|\binformant|\bapplicant\b|\brespondent\b",
+    re.IGNORECASE,
+)
 
 EXCERPT_SELECTOR_PROMPT = """Select the best excerpt from each document chunk for answering the user's question.
 Return JSON only:
@@ -50,12 +63,16 @@ Return JSON only:
 
 Rules:
 - excerpt must be a contiguous substring copied verbatim from the chunk text (handle OCR spacing faithfully).
-- Pick the span that best supports answering the question or sub-questions — NEVER return only citation headers or case captions.
+- Pick the span that best supports answering the question for the stated intent and coverage goal.
+- For listing intents: prefer spans naming parties/counterparties, who filed against whom, and core allegations.
+- For overview intents: prefer spans with damages/relief amounts, central facts, and dispositions when present.
 - For name questions: include the span where a person is named in relation to plaintiff/son/infant.
 - Prefer spans with names, dates, amounts, or role labels when relevant.
 - Keep each excerpt under {max_chars} characters.
 - If nothing in a chunk is relevant, use the most informative {max_chars}-char span.
 
+Intent: {intent}
+Coverage goal: {coverage_goal}
 Question: {question}
 Sub-questions: {sub_questions}
 
@@ -103,11 +120,49 @@ def _name_subquestion_requested(sub_questions: list[SubQuestion] | None) -> bool
     )
 
 
+def _amount_anchored_excerpt(text: str, max_chars: int) -> str | None:
+    cleaned = (text or "").strip().replace("\n", " ")
+    if not cleaned:
+        return None
+    match = _AMOUNT_HINT_RE.search(cleaned)
+    if not match:
+        return None
+    start = max(0, match.start() - 80)
+    end = min(len(cleaned), start + max_chars)
+    if end - start < max_chars:
+        start = max(0, end - max_chars)
+    excerpt = cleaned[start:end].strip()
+    if end < len(cleaned):
+        excerpt = _trim_excerpt_end(excerpt, max_chars)
+    return excerpt
+
+
+def _listing_anchored_excerpt(text: str, max_chars: int) -> str | None:
+    cleaned = (text or "").strip().replace("\n", " ")
+    if not cleaned:
+        return None
+    if len(cleaned) <= max_chars and _LISTING_CAPTION_RE.search(cleaned):
+        return cleaned
+    match = _LISTING_SUBSTANCE_RE.search(cleaned)
+    if not match:
+        return None
+    start = max(0, match.start() - 60)
+    end = min(len(cleaned), start + max_chars)
+    if end - start < max_chars:
+        start = max(0, end - max_chars)
+    excerpt = cleaned[start:end].strip()
+    if end < len(cleaned):
+        excerpt = _trim_excerpt_end(excerpt, max_chars)
+    return excerpt
+
+
 def _best_excerpt(
     text: str,
     max_chars: int,
     *,
     sub_questions: list[SubQuestion] | None = None,
+    prefer_amounts: bool = False,
+    prefer_listing: bool = False,
 ) -> str:
     """Pick a window maximizing generic fact-bearing tokens (not citation headers)."""
     cleaned = (text or "").strip().replace("\n", " ")
@@ -115,6 +170,16 @@ def _best_excerpt(
         return ""
     if len(cleaned) <= max_chars:
         return cleaned
+
+    if prefer_listing:
+        anchored = _listing_anchored_excerpt(cleaned, max_chars)
+        if anchored:
+            return anchored
+
+    if prefer_amounts:
+        anchored = _amount_anchored_excerpt(cleaned, max_chars)
+        if anchored:
+            return anchored
 
     prefer_identity = _name_subquestion_requested(sub_questions) or bool(
         _IDENTITY_PHRASE_RE.search(cleaned) or _OCR_NAME_BEFORE_INFANT_RE.search(cleaned)
@@ -130,6 +195,12 @@ def _best_excerpt(
     for start in range(0, len(cleaned) - max_chars + 1, step):
         window = cleaned[start : start + max_chars]
         score = len(_FACT_HINT_RE.findall(window)) + len(_PROPER_NAME_RE.findall(window))
+        if _AMOUNT_HINT_RE.search(window):
+            score += 8 if prefer_amounts else 3
+        if _LISTING_SUBSTANCE_RE.search(window):
+            score += 10 if prefer_listing else 0
+        if _LISTING_CAPTION_RE.search(window) and prefer_listing:
+            score += 6
         if _OCR_NAME_BEFORE_INFANT_RE.search(window):
             score += 12
         elif _IDENTITY_PHRASE_RE.search(window):
@@ -157,8 +228,15 @@ def _fallback_excerpt(
     max_chars: int,
     *,
     sub_questions: list[SubQuestion] | None = None,
+    prefer_amounts: bool = False,
+    prefer_listing: bool = False,
 ) -> str:
-    return _best_excerpt(text, max_chars, sub_questions=sub_questions)
+    return _best_excerpt(
+        text, max_chars,
+        sub_questions=sub_questions,
+        prefer_amounts=prefer_amounts,
+        prefer_listing=prefer_listing,
+    )
 
 
 def _excerpt_quality(text: str) -> int:
@@ -179,10 +257,19 @@ def _refine_excerpt(
     max_chars: int,
     *,
     sub_questions: list[SubQuestion] | None = None,
+    prefer_amounts: bool = False,
+    prefer_listing: bool = False,
 ) -> str:
     """Prefer SLM excerpt unless generic scoring shows a better window exists."""
-    best = _best_excerpt(full_text, max_chars, sub_questions=sub_questions)
+    best = _best_excerpt(
+        full_text, max_chars,
+        sub_questions=sub_questions,
+        prefer_amounts=prefer_amounts,
+        prefer_listing=prefer_listing,
+    )
     slm_q = _excerpt_quality(slm_excerpt)
+    if _AMOUNT_HINT_RE.search(slm_excerpt):
+        slm_q += 8 if prefer_amounts else 3
     if _OCR_NAME_BEFORE_INFANT_RE.search(slm_excerpt):
         slm_q += 8
     if slm_q + 1 >= _excerpt_quality(best):
@@ -196,6 +283,10 @@ def select_excerpts(
     question: str,
     sub_questions: list[SubQuestion] | None = None,
     max_chars: int = 600,
+    prefer_amounts: bool = False,
+    prefer_listing: bool = False,
+    intent: str = "general",
+    coverage_goal: str = "",
 ) -> dict[str, str]:
     """Return chunk_id -> excerpt text. Uses SLM when enabled, else best window."""
     if not hits:
@@ -203,7 +294,12 @@ def select_excerpts(
 
     if not settings.enable_excerpt_selector:
         return {
-            h.chunk_id: _best_excerpt(h.text_content or "", max_chars, sub_questions=sub_questions)
+            h.chunk_id: _best_excerpt(
+                h.text_content or "", max_chars,
+                sub_questions=sub_questions,
+                prefer_amounts=prefer_amounts,
+                prefer_listing=prefer_listing,
+            )
             for h in hits
         }
 
@@ -221,6 +317,8 @@ def select_excerpts(
             "role": "user",
             "content": EXCERPT_SELECTOR_PROMPT.format(
                 max_chars=max_chars,
+                intent=intent,
+                coverage_goal=coverage_goal or "(answer the main question)",
                 question=question,
                 sub_questions=sub_q_text,
                 chunk_blocks="\n\n---\n\n".join(chunk_blocks),
@@ -232,7 +330,12 @@ def select_excerpts(
     )
     if not raw:
         return {
-            h.chunk_id: _best_excerpt(h.text_content or "", max_chars, sub_questions=sub_questions)
+            h.chunk_id: _best_excerpt(
+                h.text_content or "", max_chars,
+                sub_questions=sub_questions,
+                prefer_amounts=prefer_amounts,
+                prefer_listing=prefer_listing,
+            )
             for h in hits
         }
 
@@ -250,7 +353,12 @@ def select_excerpts(
             if cid and excerpt:
                 full = (by_id[cid].text_content or "") if cid in by_id else ""
                 out[cid] = (
-                    _refine_excerpt(full, excerpt, max_chars, sub_questions=sub_questions)
+                    _refine_excerpt(
+                        full, excerpt, max_chars,
+                        sub_questions=sub_questions,
+                        prefer_amounts=prefer_amounts,
+                        prefer_listing=prefer_listing,
+                    )
                     if full
                     else excerpt[:max_chars]
                 )
@@ -258,14 +366,24 @@ def select_excerpts(
             for h in hits:
                 out.setdefault(
                     h.chunk_id,
-                    _best_excerpt(h.text_content or "", max_chars, sub_questions=sub_questions),
+                    _best_excerpt(
+                        h.text_content or "", max_chars,
+                        sub_questions=sub_questions,
+                        prefer_amounts=prefer_amounts,
+                        prefer_listing=prefer_listing,
+                    ),
                 )
             return out
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.warning("excerpt selector parse failed: %s", exc)
 
     return {
-        h.chunk_id: _best_excerpt(h.text_content or "", max_chars, sub_questions=sub_questions)
+        h.chunk_id: _best_excerpt(
+            h.text_content or "", max_chars,
+            sub_questions=sub_questions,
+            prefer_amounts=prefer_amounts,
+            prefer_listing=prefer_listing,
+        )
         for h in hits
     }
 
@@ -289,3 +407,7 @@ def identity_signal_strength(text: str | None) -> int:
 def has_identity_signal(text: str | None) -> bool:
     """Whether chunk text likely identifies a named party (document-agnostic)."""
     return identity_signal_strength(text) > 0
+
+
+def has_amount_signal(text: str | None) -> bool:
+    return bool(text and _AMOUNT_HINT_RE.search(text))

@@ -30,6 +30,7 @@ def overview_retrieve_with_progress(
         min_distinct_pages=3,
         pin_best_default=True,
         anchor_top_k=settings.chat_overview_pool_k // 2,
+        pass_top_k=max(settings.chat_overview_pool_k // 3, 12),
         entity_boost=True,
         early_page_bias=True,
         strategy="case_overview",

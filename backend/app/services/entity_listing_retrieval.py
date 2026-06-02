@@ -10,34 +10,13 @@ from app.services.entity_index import (
     lookup_documents_for_party,
     lookup_pages_for_party_in_document,
 )
-from app.services.fts_query_builder import build_fts_match_string
-from app.services.fts_search import FtsHit, fts_search, fts_search_on_pages
-from app.services.planned_retrieval import _early_page_thresholds, _fts_hit_to_search_hit
-from app.services.query_understanding import FtsPlan, QueryUnderstanding
+from app.services.pass_retrieval import run_search_passes_for_document
+from app.services.planned_retrieval import _fts_hit_to_search_hit
+from app.services.query_understanding import QueryUnderstanding, SearchPass
 from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
 
 
-def _listing_anchor_fts(understanding: QueryUnderstanding, query: str) -> str:
-    if understanding.target_entity and understanding.target_entity.surfaces:
-        phrases = understanding.target_entity.surfaces[:1]
-        plan = FtsPlan(phrases=phrases, must_terms=understanding.fts.must_terms[:2], operator="OR")
-    else:
-        plan = FtsPlan(
-            must_terms=understanding.fts.must_terms[:2],
-            phrases=understanding.fts.phrases,
-            operator="OR",
-        )
-    return build_fts_match_string(plan, raw_query_fallback=query)
-
-
-def _caption_pass_fts() -> str:
-    return build_fts_match_string(
-        FtsPlan(must_terms=["informant", "commission"], operator="AND"),
-        raw_query_fallback="informant commission",
-    )
-
-
-def _merge_pool(pool: dict[str, FtsHit], hits: list[FtsHit]) -> None:
+def _merge_pool(pool: dict, hits: list) -> None:
     for h in hits:
         existing = pool.get(h.chunk_id)
         if existing is None or h.score < existing.score:
@@ -45,18 +24,18 @@ def _merge_pool(pool: dict[str, FtsHit], hits: list[FtsHit]) -> None:
 
 
 def _apply_doc_quotas(
-    hits: list[FtsHit],
+    hits: list,
     *,
     min_per_doc: int,
     max_per_doc: int,
     limit: int,
     doc_order: list[str],
-) -> list[FtsHit]:
-    by_doc: dict[str, list[FtsHit]] = {}
+) -> list:
+    by_doc: dict[str, list] = {}
     for h in hits:
         by_doc.setdefault(h.document_id, []).append(h)
 
-    selected: list[FtsHit] = []
+    selected: list = []
     seen: set[str] = set()
 
     for doc_id in doc_order:
@@ -99,7 +78,7 @@ def entity_listing_retrieve_with_progress(
     query: str = "",
     emitter: RetrievalProgressEmitter | None = None,
 ) -> Iterator[dict]:
-    """Entity-first retrieval with progress events."""
+    """Entity-first retrieval: discover documents, then run planner passes per document."""
     progress = emitter or RetrievalProgressEmitter()
     target = understanding.target_entity
     canonicals = target.resolved_canonicals if target else []
@@ -127,41 +106,51 @@ def entity_listing_retrieve_with_progress(
         target_entity=target.canonical if target else None,
     )
 
-    anchor_fts = _listing_anchor_fts(understanding, query)
-    caption_fts = _caption_pass_fts()
-    pool: dict[str, FtsHit] = {}
+    search_passes = list(understanding.search_passes)
+    if not search_passes:
+        terms = list(understanding.fts.must_terms[:2])
+        if not terms and understanding.target_entity:
+            terms = [
+                t for t in understanding.target_entity.canonical.split()
+                if len(t) > 2
+            ][:2]
+        if terms:
+            search_passes = [
+                SearchPass(label="entity_anchor", fts_terms=terms, operator="OR", pin_best=False)
+            ]
+    pool: dict = {}
     pages_per_doc: dict[str, list[int]] = {}
     per_doc_hits: dict[str, int] = {}
 
     chunks_per_doc = settings.chat_listing_chunks_per_doc
     min_per_doc = settings.chat_listing_min_chunks_per_doc
+    pass_top_k = max(chunks_per_doc, 4)
 
-    if not doc_rows and anchor_fts:
-        yield progress.progress("search", "start", label="fallback_fts")
-        fallback = fts_search(
-            db,
-            query=query,
-            fts_query=anchor_fts,
-            workspace_id=workspace_id,
-            document_ids=document_ids,
-            top_k=settings.chat_listing_pool_k,
-            max_chunks_per_doc=chunks_per_doc,
-        )
-        _merge_pool(pool, fallback)
-        doc_rows = [
-            (doc_id, 1)
-            for doc_id in {h.document_id for h in fallback}
-        ]
-        best = progress.best_hit(fallback)
-        if best:
-            snippet = progress.snippet_from_hit(best, "fallback_fts")
-            if snippet:
-                yield snippet
-        yield progress.progress("search", "done", label="fallback_fts", hit_count=len(fallback))
+    if not doc_rows and search_passes:
+        yield progress.progress("search", "start", label="fallback_planned_passes")
+        from app.services.fts_query_builder import build_fts_match_string
+        from app.services.fts_search import fts_search
+        from app.services.query_understanding import FtsPlan
 
-    early_thresholds = _early_page_thresholds(db, [d for d, _ in doc_rows] if doc_rows else document_ids)
+        fallback: list = []
+        for sp in search_passes:
+            pass_plan = FtsPlan(must_terms=sp.fts_terms[:2], operator=sp.operator)
+            pass_fts = build_fts_match_string(pass_plan, raw_query_fallback=" ".join(sp.fts_terms))
+            hits = fts_search(
+                db,
+                query=query,
+                fts_query=pass_fts,
+                workspace_id=workspace_id,
+                document_ids=document_ids,
+                top_k=settings.chat_listing_pool_k,
+                max_chunks_per_doc=chunks_per_doc,
+            )
+            fallback.extend(hits)
+            _merge_pool(pool, hits)
+        doc_rows = [(doc_id, 1) for doc_id in {h.document_id for h in fallback}]
+        yield progress.progress("search", "done", label="fallback_planned_passes", hit_count=len(fallback))
 
-    for doc_id, mention_count in doc_rows:
+    for doc_id, _mention_count in doc_rows:
         doc_name = progress.doc_names.get(doc_id, doc_id)
         yield progress.progress(
             "search",
@@ -175,34 +164,19 @@ def entity_listing_retrieve_with_progress(
         )
         pages_per_doc[doc_id] = sorted(entity_pages)
 
-        page_set = {(doc_id, p) for p in entity_pages}
-        doc_hits: list[FtsHit] = []
-        if page_set and anchor_fts:
-            hits = fts_search_on_pages(
-                db,
-                query=anchor_fts,
-                workspace_id=workspace_id,
-                pages=page_set,
-                top_k=chunks_per_doc,
-            )
-            _merge_pool(pool, hits)
-            doc_hits.extend(hits)
-            per_doc_hits[doc_id] = len(hits)
-
-        threshold = early_thresholds.get(doc_id, 3)
-        early_pages = {(doc_id, p) for p in entity_pages if p <= threshold}
-        if not early_pages:
-            early_pages = {(doc_id, p) for p in range(1, min(threshold, 5) + 1)}
-        if caption_fts and early_pages:
-            caption_hits = fts_search_on_pages(
-                db,
-                query=caption_fts,
-                workspace_id=workspace_id,
-                pages=early_pages,
-                top_k=2,
-            )
-            _merge_pool(pool, caption_hits)
-            doc_hits.extend(caption_hits)
+        doc_hits = run_search_passes_for_document(
+            db,
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            query=query,
+            search_passes=search_passes,
+            anchor_plan=understanding.fts,
+            page_hint=entity_pages or None,
+            pass_top_k=pass_top_k,
+            max_chunks_per_doc=chunks_per_doc,
+        )
+        _merge_pool(pool, doc_hits)
+        per_doc_hits[doc_id] = len(doc_hits)
 
         best = progress.best_hit(doc_hits)
         if best:
@@ -216,6 +190,7 @@ def entity_listing_retrieve_with_progress(
             document_id=doc_id,
             document_name=doc_name,
             hit_count=per_doc_hits.get(doc_id, 0),
+            pass_labels=[p.label for p in search_passes],
         )
 
     merged = sorted(pool.values(), key=lambda h: h.score)
@@ -238,7 +213,8 @@ def entity_listing_retrieve_with_progress(
         "per_doc_fts_hits": per_doc_hits,
         "pool_size": len(pool),
         "diverse_size": len(diverse),
-        "anchor_fts": anchor_fts,
+        "search_pass_labels": [p.label for p in search_passes],
+        "search_pass_count": len(search_passes),
     }
     yield progress.progress("search", "done", pool_size=len(pool), hit_count=len(diverse))
     return [_fts_hit_to_search_hit(h) for h in diverse], diagnostics

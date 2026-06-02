@@ -56,6 +56,10 @@ def build_citation_map(
     excerpt_chars: int = 400,
     question: str = "",
     sub_questions: list[SubQuestion] | None = None,
+    prefer_amounts: bool = False,
+    prefer_listing: bool = False,
+    intent: str = "general",
+    coverage_goal: str = "",
 ) -> CitationMap:
     seen: set[str] = set()
     refs: list[CitationRef] = []
@@ -78,6 +82,10 @@ def build_citation_map(
         question=question,
         sub_questions=sub_questions,
         max_chars=excerpt_chars,
+        prefer_amounts=prefer_amounts,
+        prefer_listing=prefer_listing,
+        intent=intent,
+        coverage_goal=coverage_goal,
     )
 
     for hit in unique_hits:
@@ -121,7 +129,7 @@ def build_system_prompt(
     target_entity: str | None = None,
 ) -> str:
     if intent in {"case_overview", "entity_matter_listing"}:
-        excerpt_cap = 800
+        excerpt_cap = 1200 if intent == "entity_matter_listing" else 800
     elif intent == "factual_lookup":
         excerpt_cap = 600
     else:
@@ -140,10 +148,11 @@ def build_system_prompt(
             "",
             "Then one markdown section per source document:",
             "## [Document filename exactly as shown in Sources]",
-            "- **Role of party:** defendant/respondent/informant target — only if stated in that document's excerpts [N]",
+            "- **Role of party:** defendant/respondent/opposite party — only if stated in that document's excerpts [N]",
+            "- **Other parties / counterparties:** list informants, complainants, and co-respondents named in that document [N]",
             "- **Forum / statute:** court, commission, act sections — only from that document [N]",
-            "- **Key facts:** central allegations or findings in that document [N]",
-            "- **Outcome / stage:** disposition, order, investigation stage — only if stated [N]",
+            "- **Key facts:** who filed against whom, core allegations, statutory provisions invoked, and conduct alleged [N]",
+            "- **Outcome / stage:** disposition, order, investigation stage, penalty — only if stated [N]",
             "",
             "Rules:",
             "- Every factual bullet MUST include an inline citation [N] from that same document only.",
@@ -173,6 +182,9 @@ def build_system_prompt(
             "- Every factual sentence or bullet MUST include an inline citation [N].",
             "- Distinguish roles clearly: claimant/plaintiff vs injured third party vs defendant/respondent.",
             "- In Key facts, describe the central events and underlying incident BEFORE procedural history.",
+            "- In Damages / relief sought, state every monetary amount and relief explicitly mentioned in excerpts "
+            "(e.g. 'claimed damages in the sum of £1,000'). Never write 'Sources do not specify' if any excerpt "
+            "contains damages, relief, or sum language.",
             "- State amounts, dates, and party names ONLY when present in cited excerpts — never invent.",
             "- Do NOT write 'various legal precedents' without naming them from a cited source.",
             "- If a section lacks evidence, write: 'Sources do not specify [topic].'",
