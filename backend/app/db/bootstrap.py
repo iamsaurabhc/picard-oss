@@ -26,6 +26,14 @@ def run_migrations(engine: Engine) -> None:
             if "ocr_engine" not in doc_cols:
                 conn.execute(text("ALTER TABLE documents ADD COLUMN ocr_engine TEXT"))
 
+        session_cols = _column_names(conn, "chat_sessions")
+        if session_cols:
+            if "updated_at" not in session_cols:
+                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN updated_at TEXT"))
+                conn.execute(text("UPDATE chat_sessions SET updated_at = created_at"))
+            if "document_ids_json" not in session_cols:
+                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN document_ids_json TEXT"))
+
 
 def run_init_sql(engine: Engine) -> None:
     init_path = Path(__file__).parent / "init.sql"

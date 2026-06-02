@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import ChatMessage, ChatSession, Document
 from app.db.session import utc_now_iso
-from app.schemas import ChatStreamRequest, SearchHit, SearchRequest
+from app.schemas import ChatSessionOut, ChatSessionSummary, ChatSessionUpdate, ChatStreamRequest, SearchHit, SearchRequest
 from app.services.case_scoping import resolve_case_document_ids
 from app.services.citation_judge import judge_citations
 from app.services.citations import (
@@ -58,17 +58,163 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str) -> N
     # #endregion
 
 
+_GENERIC_SESSION_TITLES = frozenset({"New chat", "Assistant"})
+
+
+def _parse_document_ids_json(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def session_to_out(session: ChatSession) -> ChatSessionOut:
+    return ChatSessionOut(
+        id=session.id,
+        workspace_id=session.workspace_id,
+        title=session.title,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        document_ids=_parse_document_ids_json(session.document_ids_json),
+    )
+
+
+def _session_has_user_message(db: Session, session_id: str) -> bool:
+    messages = list_messages(db, session_id)
+    return any(m.role == "user" for m in messages)
+
+
+def _prune_extra_draft_sessions(db: Session, workspace_id: str) -> None:
+    """Keep at most one empty (no user messages) session per workspace."""
+    sessions = list(
+        db.scalars(
+            select(ChatSession)
+            .where(ChatSession.workspace_id == workspace_id)
+            .order_by(ChatSession.updated_at.desc())
+        ).all()
+    )
+    drafts = [s for s in sessions if not _session_has_user_message(db, s.id)]
+    for extra in drafts[1:]:
+        db.delete(extra)
+    if len(drafts) > 1:
+        db.commit()
+
+
+def get_or_create_draft_session(db: Session, workspace_id: str, title: str | None = None) -> ChatSession:
+    _prune_extra_draft_sessions(db, workspace_id)
+    sessions = list(
+        db.scalars(
+            select(ChatSession)
+            .where(ChatSession.workspace_id == workspace_id)
+            .order_by(ChatSession.updated_at.desc())
+        ).all()
+    )
+    for session in sessions:
+        if not _session_has_user_message(db, session.id):
+            return session
+    return create_session(db, workspace_id, title)
+
+
 def create_session(db: Session, workspace_id: str, title: str | None = None) -> ChatSession:
+    now = utc_now_iso()
     session = ChatSession(
         id=str(uuid.uuid4()),
         workspace_id=workspace_id,
         title=title or "New chat",
-        created_at=utc_now_iso(),
+        created_at=now,
+        updated_at=now,
     )
     db.add(session)
     db.commit()
     db.refresh(session)
     return session
+
+
+def get_session(db: Session, session_id: str) -> ChatSessionOut:
+    session = db.get(ChatSession, session_id)
+    if not session:
+        raise ValueError("Session not found")
+    return session_to_out(session)
+
+
+def list_sessions(db: Session, workspace_id: str) -> list[ChatSessionSummary]:
+    _prune_extra_draft_sessions(db, workspace_id)
+    sessions = list(
+        db.scalars(
+            select(ChatSession)
+            .where(ChatSession.workspace_id == workspace_id)
+            .order_by(ChatSession.updated_at.desc())
+        ).all()
+    )
+    out: list[ChatSessionSummary] = []
+    for session in sessions:
+        messages = list_messages(db, session.id)
+        has_user = any(m.role == "user" for m in messages)
+        if not has_user:
+            continue
+        preview: str | None = None
+        for msg in reversed(messages):
+            if msg.role == "user":
+                text = msg.content.strip()
+                preview = text[:120] + ("…" if len(text) > 120 else "")
+                break
+        out.append(
+            ChatSessionSummary(
+                id=session.id,
+                title=session.title,
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+                message_count=len(messages),
+                has_user_message=True,
+                preview=preview,
+            )
+        )
+    return out
+
+
+def update_session(db: Session, session_id: str, body: ChatSessionUpdate) -> ChatSessionOut:
+    session = db.get(ChatSession, session_id)
+    if not session:
+        raise ValueError("Session not found")
+    if body.title is not None:
+        session.title = body.title
+    if body.document_ids is not None:
+        session.document_ids_json = json.dumps(body.document_ids)
+    session.updated_at = utc_now_iso()
+    db.commit()
+    db.refresh(session)
+    return session_to_out(session)
+
+
+def delete_session(db: Session, session_id: str) -> None:
+    session = db.get(ChatSession, session_id)
+    if not session:
+        raise ValueError("Session not found")
+    db.delete(session)
+    db.commit()
+
+
+def _maybe_autotitle_session(session: ChatSession, user_message: str) -> None:
+    title = (session.title or "").strip()
+    if title.startswith("Tabular:"):
+        return
+    if title not in _GENERIC_SESSION_TITLES:
+        return
+    text = user_message.strip()
+    if not text:
+        return
+    session.title = text[:60] + ("…" if len(text) > 60 else "")
+
+
+def _touch_session_after_user_turn(db: Session, session: ChatSession, body: ChatStreamRequest) -> None:
+    session.updated_at = utc_now_iso()
+    if body.document_ids is not None:
+        session.document_ids_json = json.dumps(body.document_ids)
+    _maybe_autotitle_session(session, body.message)
+    db.commit()
 
 
 def list_messages(db: Session, session_id: str) -> list[ChatMessage]:
@@ -100,6 +246,9 @@ def _persist_message(
         created_at=utc_now_iso(),
     )
     db.add(msg)
+    session = db.get(ChatSession, session_id)
+    if session:
+        session.updated_at = utc_now_iso()
     db.commit()
     return msg
 
@@ -157,6 +306,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         raise ValueError("Session not found")
 
     _persist_message(db, session_id=body.session_id, role="user", content=body.message)
+    _touch_session_after_user_turn(db, session, body)
 
     emitter = RetrievalProgressEmitter(
         doc_names=_workspace_doc_names(db, body.workspace_id, body.document_ids)

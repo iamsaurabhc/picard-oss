@@ -148,11 +148,13 @@ async def main() -> int:
         print("Chester workspace not in corpus DB", file=sys.stderr)
         return 1
 
+    now = utc_now_iso()
     session = ChatSession(
         id=str(uuid.uuid4()),
         workspace_id=WORKSPACE_ID,
         title="eval",
-        created_at=utc_now_iso(),
+        created_at=now,
+        updated_at=now,
     )
     db.add(session)
     db.commit()

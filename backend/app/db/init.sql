@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   workspace_id TEXT,
   title TEXT,
   created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  document_ids_json TEXT,
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL
 );
 

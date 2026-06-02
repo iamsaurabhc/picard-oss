@@ -142,6 +142,17 @@ class SearchResponse(BaseModel):
 class ChatSessionCreate(BaseModel):
     workspace_id: str
     title: str | None = None
+    reuse_draft: bool = True
+
+
+class ChatSessionSummary(BaseModel):
+    id: str
+    title: str | None
+    created_at: str
+    updated_at: str
+    message_count: int
+    has_user_message: bool = False
+    preview: str | None = None
 
 
 class ChatSessionOut(BaseModel):
@@ -149,8 +160,13 @@ class ChatSessionOut(BaseModel):
     workspace_id: str | None
     title: str | None
     created_at: str
+    updated_at: str
+    document_ids: list[str] = Field(default_factory=list)
 
-    model_config = {"from_attributes": True}
+
+class ChatSessionUpdate(BaseModel):
+    title: str | None = None
+    document_ids: list[str] | None = None
 
 
 class ChatMessageOut(BaseModel):

@@ -53,6 +53,7 @@ export function TRChatPanel({ review, workspaceId, onClose, onCellRefClick }: Pr
       .createChatSession({
         workspace_id: workspaceId,
         title: `Tabular: ${review.title}`,
+        reuse_draft: false,
       })
       .then((s) => {
         if (!cancelled) setSessionId(s.id);

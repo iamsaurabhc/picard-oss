@@ -331,10 +331,14 @@ curl -s http://localhost:8000/search -H 'Content-Type: application/json' -d '{
 
 ### Citation chat (SSE)
 
+**UI:** Open [Chat](http://localhost:3000/chat) — the left sidebar lists prior threads for the active workspace. The latest conversation loads automatically; use **New chat** or pick a row to switch. Share or refresh with `?session={uuid}`. Document scope and citations restore when you reopen a thread.
+
 ```bash
 SESSION=$(curl -s -X POST http://localhost:8000/chat/sessions \
   -H 'Content-Type: application/json' \
   -d '{"workspace_id": "YOUR_WORKSPACE_ID"}' | jq -r .id)
+
+curl -s "http://localhost:8000/workspaces/YOUR_WORKSPACE_ID/chat/sessions" | jq .
 
 curl -N http://localhost:8000/chat/stream \
   -H 'Content-Type: application/json' \

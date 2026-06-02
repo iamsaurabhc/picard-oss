@@ -105,6 +105,8 @@ class ChatSession(Base):
     )
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    document_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     messages: Mapped[list["ChatMessage"]] = relationship(back_populates="session", cascade="all, delete-orphan")
 

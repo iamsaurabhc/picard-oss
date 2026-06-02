@@ -755,7 +755,9 @@ CREATE TABLE chat_sessions (
   id TEXT PRIMARY KEY,
   workspace_id TEXT,
   title TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  document_ids_json TEXT   -- JSON array; [] = workspace-wide scope
 );
 
 CREATE TABLE chat_messages (
@@ -2162,11 +2164,12 @@ flowchart TD
 
 #### 3.4 Chat UI
 
-- 50/50 split layout
-- `CitationParser` → pills
-- `PreResponseWrapper` for retrieval status
-- Document attachment picker (workspace docs)
-- Chat history sidebar
+- 50/50 split layout (thread + optional PDF panel)
+- `MarkdownWithCitations` → `[N]` pills → `MultiHighlightPDFViewer`
+- `RetrievalActivityPanel` for retrieval status during streaming
+- Document attachment picker (workspace docs); scope persisted per session (`document_ids_json`)
+- **Chat history sidebar** — lists workspace sessions (`GET /workspaces/{id}/chat/sessions`), resume via `/chat?session={id}`; latest thread opens by default
+- REST: `GET/PATCH/DELETE /chat/sessions/{id}`, `GET /chat/sessions/{id}/messages`
 
 #### 3.5 Refuse UX
 

@@ -134,11 +134,23 @@ export type ChatReference = {
   pinpoint_quote?: string | null;
 };
 
+export type ChatSessionSummary = {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  has_user_message: boolean;
+  preview: string | null;
+};
+
 export type ChatSession = {
   id: string;
   workspace_id: string | null;
   title: string | null;
   created_at: string;
+  updated_at: string;
+  document_ids: string[];
 };
 
 export type ChatMessage = {
@@ -358,12 +370,17 @@ export const picardApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  createChatSession: (body: { workspace_id: string; title?: string }) =>
+  createChatSession: (body: { workspace_id: string; title?: string; reuse_draft?: boolean }) =>
     request<ChatSession>("/chat/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  listChatSessions: (workspaceId: string) =>
+    request<ChatSessionSummary[]>(`/workspaces/${workspaceId}/chat/sessions`),
+  getChatSession: (sessionId: string) => request<ChatSession>(`/chat/sessions/${sessionId}`),
+  deleteChatSession: (sessionId: string) =>
+    request<void>(`/chat/sessions/${sessionId}`, { method: "DELETE" }),
   listChatMessages: (sessionId: string) =>
     request<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`),
   streamChat: async function* (
