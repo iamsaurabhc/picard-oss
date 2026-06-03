@@ -10,6 +10,8 @@ def ensure_data_dirs() -> None:
     settings.picard_data_dir.mkdir(parents=True, exist_ok=True)
     settings.pdfs_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    if settings.enable_hybrid_search:
+        settings.embedding_model_cache_path.mkdir(parents=True, exist_ok=True)
 
 
 def hash_bytes(data: bytes) -> str:

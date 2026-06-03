@@ -56,6 +56,14 @@ _LISTING_CAPTION_RE = re.compile(
     r"opposite party|party no\.?|\bop\b|\binformant|\bapplicant\b|\brespondent\b",
     re.IGNORECASE,
 )
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<=[.!?])\s+(?=[A-Z\"'(\d])|(?<=\.)\s*\n+\s*(?=[A-Z])",
+)
+_LEGAL_ABBREV_RE = re.compile(
+    r"\b(?:Mr|Mrs|Ms|Dr|Prof|Ltd|Inc|Co|No|Art|Sec|para|v|vs|ed|al)\.",
+    re.IGNORECASE,
+)
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 EXCERPT_SELECTOR_PROMPT = """Select the best excerpt from each document chunk for answering the user's question.
 Return JSON only:
@@ -82,6 +90,123 @@ Sub-questions: {sub_questions}
 
 Chunks:
 {chunk_blocks}"""
+
+
+def split_sentences(text: str) -> list[str]:
+    """Legal-safe sentence split (abbreviations and clause numbers preserved)."""
+    cleaned = (text or "").strip().replace("\n", " ")
+    if not cleaned:
+        return []
+    protected = cleaned
+    placeholders: list[str] = []
+
+    def _protect(m: re.Match) -> str:
+        placeholders.append(m.group(0))
+        return f"§ABB{len(placeholders) - 1}§"
+
+    protected = _LEGAL_ABBREV_RE.sub(_protect, protected)
+    parts = _SENTENCE_SPLIT_RE.split(protected)
+    out: list[str] = []
+    for part in parts:
+        s = part.strip()
+        if not s or len(s) < 12:
+            continue
+        for i, ph in enumerate(placeholders):
+            s = s.replace(f"§ABB{i}§", ph)
+        out.append(s)
+    if not out and cleaned:
+        return [cleaned]
+    return out
+
+
+def _query_terms(question: str) -> set[str]:
+    stop = {
+        "the", "a", "an", "is", "are", "was", "were", "what", "who", "which",
+        "when", "where", "how", "did", "do", "does", "in", "on", "for", "of",
+        "to", "and", "or", "with", "from", "this", "that", "case", "about",
+    }
+    return {t.casefold() for t in _WORD_RE.findall(question or "") if len(t) > 2 and t.casefold() not in stop}
+
+
+def _score_sentence(
+    sentence: str,
+    *,
+    question: str,
+    query_terms: set[str],
+    prefer_amounts: bool,
+    prefer_listing: bool,
+    prefer_identity: bool,
+) -> int:
+    s_lower = sentence.casefold()
+    score = 0
+    sent_terms = {t.casefold() for t in _WORD_RE.findall(sentence) if len(t) > 2}
+    score += len(query_terms & sent_terms) * 4
+    score += len(_FACT_HINT_RE.findall(sentence)) * 2
+    score += len(_PROPER_NAME_RE.findall(sentence))
+    if _AMOUNT_HINT_RE.search(sentence):
+        score += 10 if prefer_amounts else 4
+    if _LISTING_SUBSTANCE_RE.search(sentence):
+        score += 10 if prefer_listing else 2
+    if prefer_identity and (_OCR_NAME_BEFORE_INFANT_RE.search(sentence) or _IDENTITY_PHRASE_RE.search(sentence)):
+        score += 12
+    if _CITATION_HEADER_RE.match(sentence[:80]):
+        score -= 4
+    if question and question.casefold()[:40] in s_lower:
+        score -= 2
+    return score
+
+
+def focus_sentences_excerpt(
+    text: str,
+    max_chars: int,
+    *,
+    question: str = "",
+    prefer_amounts: bool = False,
+    prefer_listing: bool = False,
+    sub_questions: list[SubQuestion] | None = None,
+) -> str | None:
+    """Focus Mode: rank sentences, return top 1-3 joined (paper Q9)."""
+    sentences = split_sentences(text)
+    if not sentences:
+        return None
+    if len(sentences) == 1 and len(sentences[0]) <= max_chars:
+        return sentences[0]
+
+    q_terms = _query_terms(question)
+    for sq in sub_questions or []:
+        q_terms |= _query_terms(sq.question)
+    prefer_identity = _name_subquestion_requested(sub_questions) or bool(
+        _IDENTITY_PHRASE_RE.search(text) or _OCR_NAME_BEFORE_INFANT_RE.search(text)
+    )
+
+    ranked = sorted(
+        sentences,
+        key=lambda s: _score_sentence(
+            s,
+            question=question,
+            query_terms=q_terms,
+            prefer_amounts=prefer_amounts,
+            prefer_listing=prefer_listing,
+            prefer_identity=prefer_identity,
+        ),
+        reverse=True,
+    )
+
+    parts: list[str] = []
+    total = 0
+    for sent in ranked[:3]:
+        if total + len(sent) + 1 > max_chars and parts:
+            break
+        parts.append(sent)
+        total += len(sent) + 1
+        if total >= max_chars:
+            break
+    if not parts:
+        return None
+    excerpt = " ".join(parts).strip()
+    if len(excerpt) > max_chars:
+        excerpt = _trim_excerpt_end(excerpt, max_chars)
+    return excerpt
 
 
 def _trim_excerpt_end(excerpt: str, max_chars: int) -> str:
@@ -218,6 +343,7 @@ def _best_excerpt(
     text: str,
     max_chars: int,
     *,
+    question: str = "",
     sub_questions: list[SubQuestion] | None = None,
     prefer_amounts: bool = False,
     prefer_listing: bool = False,
@@ -231,6 +357,18 @@ def _best_excerpt(
         return ""
     if len(cleaned) <= max_chars:
         return cleaned
+
+    if settings.enable_focus_excerpts and question:
+        focused = focus_sentences_excerpt(
+            cleaned,
+            max_chars,
+            question=question,
+            prefer_amounts=prefer_amounts,
+            prefer_listing=prefer_listing,
+            sub_questions=sub_questions,
+        )
+        if focused:
+            return focused
 
     if db is not None and hit is not None:
         entity_excerpt = _entity_anchored_excerpt(
@@ -366,6 +504,7 @@ def select_excerpts(
         return {
             h.chunk_id: _best_excerpt(
                 h.text_content or "", max_chars,
+                question=question,
                 sub_questions=sub_questions,
                 prefer_amounts=prefer_amounts,
                 prefer_listing=prefer_listing,
@@ -378,7 +517,19 @@ def select_excerpts(
 
     chunk_blocks: list[str] = []
     for h in hits:
-        text = (h.text_content or "")[:2000]
+        full = (h.text_content or "")[:2000]
+        if settings.enable_focus_excerpts:
+            focused = focus_sentences_excerpt(
+                full,
+                min(max_chars * 2, 1200),
+                question=question,
+                prefer_amounts=prefer_amounts,
+                prefer_listing=prefer_listing,
+                sub_questions=sub_questions,
+            )
+            text = focused or full
+        else:
+            text = full
         chunk_blocks.append(f"chunk_id={h.chunk_id} page={h.page_number}\n{text}")
 
     sub_q_text = "\n".join(
@@ -405,6 +556,7 @@ def select_excerpts(
         return {
             h.chunk_id: _best_excerpt(
                 h.text_content or "", max_chars,
+                question=question,
                 sub_questions=sub_questions,
                 prefer_amounts=prefer_amounts,
                 prefer_listing=prefer_listing,
@@ -444,6 +596,7 @@ def select_excerpts(
                     h.chunk_id,
                     _best_excerpt(
                         h.text_content or "", max_chars,
+                        question=question,
                         sub_questions=sub_questions,
                         prefer_amounts=prefer_amounts,
                         prefer_listing=prefer_listing,
@@ -459,6 +612,7 @@ def select_excerpts(
     return {
         h.chunk_id: _best_excerpt(
             h.text_content or "", max_chars,
+            question=question,
             sub_questions=sub_questions,
             prefer_amounts=prefer_amounts,
             prefer_listing=prefer_listing,

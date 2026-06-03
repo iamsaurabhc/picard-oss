@@ -1,4 +1,4 @@
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -94,6 +94,17 @@ class PageEntity(Base):
     page_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     entity_id: Mapped[str] = mapped_column(String, ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
     mention_count: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class ChunkEmbedding(Base):
+    __tablename__ = "chunk_embeddings"
+
+    chunk_id: Mapped[str] = mapped_column(String, ForeignKey("chunks.id", ondelete="CASCADE"), primary_key=True)
+    document_id: Mapped[str] = mapped_column(String, ForeignKey("documents.id", ondelete="CASCADE"))
+    embedding_blob: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    model_id: Mapped[str] = mapped_column(String, nullable=False)
+    dims: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class ChatSession(Base):

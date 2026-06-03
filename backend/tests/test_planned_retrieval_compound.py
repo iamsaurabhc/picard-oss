@@ -11,6 +11,7 @@ from tests.corpus_constants import DOCUMENT_ID, WORKSPACE_ID
 @pytest.mark.corpus
 def test_compound_factual_retrieves_hits(corpus_session):
     settings.enable_llm_query_understanding = False
+    settings.enable_query_expansion = False
     settings.enable_excerpt_selector = False
     query = "janet chester son's name? age? date of accident?"
     u = understand_query(
@@ -37,6 +38,7 @@ def test_compound_factual_retrieves_hits(corpus_session):
 @pytest.mark.corpus
 def test_compound_factual_prompt_with_sub_questions(corpus_session):
     settings.enable_llm_query_understanding = False
+    settings.enable_query_expansion = False
     settings.enable_context_ranker = False
     settings.enable_excerpt_selector = False
     query = "janet chester son's name? age? date of accident?"

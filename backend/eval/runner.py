@@ -12,6 +12,8 @@ from app.services.overview_retrieval import overview_retrieve
 from app.services.query_understanding import understand_query
 from app.services.search import execute_search
 
+_PARAPHRASE_BENCH_IDS = frozenset({"chester_bench_002", "chester_bench_003"})
+
 _MIN_SUBSTANTIVE_CHARS = 40
 _OVERVIEW_RECALL_K = 20
 
@@ -102,6 +104,27 @@ def _page_recall(result: dict, gold_pages: list[int], document_id: str, k: int =
     return len(returned_pages & set(gold_pages)) / len(set(gold_pages))
 
 
+def _expansion_recall_lift(db: Session, label: dict, k: int) -> float:
+    """Recall@k with expansion minus recall without (R-05 expansion gate)."""
+    from eval.metrics import recall_at_k
+
+    gold_chunks = set(label.get("gold_chunk_ids") or [])
+    if not gold_chunks:
+        return 0.0
+
+    doc_ids = [label["document_id"]] if label.get("document_id") else None
+    settings.enable_query_expansion = False
+    raw = run_gold_label(db, label)
+    raw_r = recall_at_k(raw["hit_ids"], gold_chunks, k)
+
+    settings.enable_query_expansion = True
+    expanded = run_gold_label(db, label)
+    exp_r = recall_at_k(expanded["hit_ids"], gold_chunks, k)
+
+    settings.enable_query_expansion = False
+    return max(0.0, exp_r - raw_r)
+
+
 def _header_only_top4(result: dict) -> bool:
     """True if all top-4 hits are header-only (<40 chars)."""
     lens = result.get("hit_text_lens", [])[:4]
@@ -141,7 +164,15 @@ def build_scorecard(db: Session, gold_path: Path) -> dict:
         gold_pages = label.get("gold_pages") or []
         if gold_pages and isinstance(gold_pages[0], int) and not label.get("must_refuse"):
             pr = _page_recall(result, gold_pages, label["document_id"], k=page_k)
-            scores[f"R-05_{label['query_id']}"] = pr
+            key = "R-05-page" if label.get("query_id", "").startswith("chester_chat") else "R-05"
+            scores[f"{key}_{label['query_id']}"] = pr
+        is_paraphrase = (
+            label.get("variant_group") == "paraphrase"
+            or label.get("query_id") in _PARAPHRASE_BENCH_IDS
+        )
+        if is_paraphrase and gold_chunks and not label.get("must_refuse"):
+            exp_lift = _expansion_recall_lift(db, label, recall_k)
+            scores[f"R-05-expansion_{label['query_id']}"] = exp_lift
         if label.get("query_id", "").startswith("chester_chat") and not label.get("must_refuse"):
             scores[f"R-05b_{label['query_id']}"] = 0.0 if _header_only_top4(result) else 1.0
         if label.get("must_refuse"):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,8 @@ from app.db.session import SessionLocal, utc_now_iso
 from app.services.chunk_builder import build_chunks_from_pdf, new_chunk_id
 from app.services.entity_index import extract_entities_for_document
 from app.services.storage import resolve_pdf_path
+
+logger = logging.getLogger(__name__)
 
 # liteparse / NER backends are not safe under concurrent native calls on macOS.
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -91,6 +94,19 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
         from app.services.metadata_extractor import extract_metadata_for_document
 
         extract_metadata_for_document(db, document_id)
+
+        from app.config import settings as app_settings
+        if app_settings.enable_hybrid_search:
+            from app.services.chunk_embeddings import (
+                ensure_embedding_model,
+                index_document_after_parse,
+            )
+
+            try:
+                if ensure_embedding_model():
+                    index_document_after_parse(db, document_id)
+            except Exception as emb_exc:
+                logger.warning("chunk embedding index failed: %s", emb_exc)
     except Exception as exc:
         db.rollback()
         doc = db.get(Document, document_id)

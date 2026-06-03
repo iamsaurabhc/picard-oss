@@ -20,12 +20,50 @@ class Settings(BaseSettings):
     enable_tiered_models: bool = False
     enable_llm_query_understanding: bool = Field(
         default=True,
-        validation_alias=AliasChoices("ENABLE_LLM_QUERY_UNDERSTANDING", "ENABLE_QUERY_EXPANSION"),
+        validation_alias="ENABLE_LLM_QUERY_UNDERSTANDING",
+    )
+    enable_query_expansion: bool = Field(
+        default=True,
+        validation_alias="ENABLE_QUERY_EXPANSION",
+    )
+    query_expansion_max_phrases: int = 5
+    query_expansion_cache_ttl_sec: int = 300
+    enable_focus_excerpts: bool = Field(
+        default=True,
+        validation_alias="ENABLE_FOCUS_EXCERPTS",
     )
     enable_context_ranker: bool = True
     enable_excerpt_selector: bool = True
     query_planner_repair_on_zero_hits: bool = True
     enable_citation_judge: bool = False
+    citation_judge_fail_closed: bool = Field(
+        default=True,
+        validation_alias="CITATION_JUDGE_FAIL_CLOSED",
+    )
+    prompt_variant: str = Field(default="help_v2", validation_alias="PROMPT_VARIANT")
+    enable_hybrid_search: bool = Field(
+        default=False,
+        validation_alias="ENABLE_HYBRID_SEARCH",
+    )
+    hybrid_pool_k: int = 16
+    hybrid_rrf_k: int = 60
+    hybrid_rrf_weight_fts: float = Field(
+        default=0.6,
+        validation_alias="HYBRID_RRF_WEIGHT_FTS",
+    )
+    embedding_model_id: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        validation_alias="EMBEDDING_MODEL_ID",
+    )
+    embedding_dims: int = 384
+    embedding_cache_dir: str | None = Field(
+        default=None,
+        validation_alias="EMBEDDING_CACHE_DIR",
+    )
+    embedding_allow_hub_download: bool = Field(
+        default=True,
+        validation_alias="EMBEDDING_ALLOW_HUB_DOWNLOAD",
+    )
     enable_carp: bool = True
     enable_metadata_llm: bool = False
     enable_regex_nlp: bool = False
@@ -96,6 +134,12 @@ class Settings(BaseSettings):
     @property
     def pdfs_dir(self) -> Path:
         return self.picard_data_dir / "pdfs"
+
+    @property
+    def embedding_model_cache_path(self) -> Path:
+        if self.embedding_cache_dir:
+            return Path(self.embedding_cache_dir)
+        return self.picard_data_dir / "models" / "fastembed"
 
 
 settings = Settings()

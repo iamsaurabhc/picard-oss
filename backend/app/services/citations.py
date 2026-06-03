@@ -3,11 +3,24 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.config import settings
+from app.prompts.legal_rag import contrastive_block, preamble_for_variant
 from app.schemas import ContextBundleOut, SearchHit
 from app.services.excerpt_selector import has_identity_signal, select_excerpts
 from app.services.query_understanding import SubQuestion
 
 MARKER_RE = re.compile(r"\[(\d+)\]")
+_AMOUNT_CLAIM_RE = re.compile(
+    r"(?:£|\$|€)\s*[\d,]+(?:\.\d+)?|\b\d{1,3}(?:,\d{3})+\s*(?:pounds?|gbp|usd)\b",
+    re.IGNORECASE,
+)
+_DATE_CLAIM_RE = re.compile(
+    r"\b(?:\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|"
+    r"January|February|March|April|May|June|July|August|September|October|November|December"
+    r"\s+\d{1,2},?\s+\d{4})\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 @dataclass
@@ -100,7 +113,11 @@ def build_citation_map(
                     bundle_id = b.bundle_id
                     break
         preview = excerpts.get(hit.chunk_id) or _fallback_excerpt(hit.text_content or "", excerpt_chars)
-        pinpoint = preview[:200] if len(preview) > 200 else preview
+        if settings.enable_focus_excerpts and preview:
+            parts = _SENTENCE_SPLIT_RE.split(preview.strip())
+            pinpoint = (parts[0] if parts else preview)[:200]
+        else:
+            pinpoint = preview[:200] if len(preview) > 200 else preview
         refs.append(
             CitationRef(
                 index=len(refs) + 1,
@@ -172,9 +189,15 @@ def build_system_prompt(
         excerpt_cap = 400
 
     entity_label = target_entity or "the named party"
+    preamble = preamble_for_variant(settings.prompt_variant)
+    contrastive = contrastive_block(intent)
 
     if intent == "entity_matter_listing":
         lines = [
+            preamble,
+            "",
+            contrastive,
+            "",
             "You are a legal document assistant listing matters involving a party across multiple source documents.",
             f"The user asked for all cases/matters involving {entity_label}.",
             "Answer ONLY using the provided source excerpts.",
@@ -203,6 +226,10 @@ def build_system_prompt(
         ]
     elif intent == "case_overview":
         lines = [
+            preamble,
+            "",
+            contrastive,
+            "",
             "You are a legal document assistant preparing a CASE OVERVIEW for a lawyer.",
             "Answer ONLY using the provided source excerpts.",
             "Structure the answer with these markdown sections (omit a section ONLY if sources are truly silent):",
@@ -234,6 +261,10 @@ def build_system_prompt(
             for sq in (sub_questions or [])
         ]
         lines = [
+            preamble,
+            "",
+            contrastive,
+            "",
             "You are a legal document assistant. Answer ONLY using the provided source excerpts.",
             "Every factual sentence MUST include an inline citation [N] matching the source list.",
             "Format the answer as professional markdown:",
@@ -253,6 +284,10 @@ def build_system_prompt(
         lines.extend(["", "Sources:"])
     else:
         lines = [
+            preamble,
+            "",
+            contrastive,
+            "",
             "You are a legal document assistant. Answer ONLY using the provided source excerpts.",
             "Every factual sentence MUST include an inline citation [N] matching the source list.",
             "When the user asks multiple sub-questions, answer each sub-part separately (use bullets or short paragraphs).",
@@ -285,6 +320,94 @@ def build_system_prompt(
     return "\n".join(lines)
 
 
+def _token_set(text: str) -> set[str]:
+    return {t.casefold() for t in re.findall(r"\w+", text or "") if len(t) > 2}
+
+
+def _overlap_score(claim: str, source: str) -> float:
+    a, b = _token_set(claim), _token_set(source)
+    if not a:
+        return 0.0
+    return len(a & b) / len(a)
+
+
+def _verify_atomic_claims_in_preview(claim: str, preview: str) -> bool:
+    preview_cf = preview.casefold()
+    for m in _AMOUNT_CLAIM_RE.finditer(claim):
+        if m.group(0).casefold() not in preview_cf:
+            return False
+    for m in _DATE_CLAIM_RE.finditer(claim):
+        if m.group(0).casefold() not in preview_cf:
+            return False
+    return True
+
+
+def _fact_verify_and_strip(cleaned: str, citation_map: CitationMap) -> tuple[str, int]:
+    """Remove sentences whose amounts/dates are not supported by cited preview."""
+    refs_by_index = {r.index: r for r in citation_map.refs}
+    stripped = 0
+    paragraphs = cleaned.split("\n\n")
+    out_paras: list[str] = []
+
+    for para in paragraphs:
+        sentences = _SENTENCE_SPLIT_RE.split(para.strip()) if para.strip() else []
+        kept: list[str] = []
+        for sent in sentences:
+            if not sent.strip():
+                continue
+            markers = [int(m.group(1)) for m in MARKER_RE.finditer(sent)]
+            has_atomic = bool(_AMOUNT_CLAIM_RE.search(sent) or _DATE_CLAIM_RE.search(sent))
+            if not has_atomic or not markers:
+                kept.append(sent)
+                continue
+            supported = any(
+                _verify_atomic_claims_in_preview(sent, refs_by_index[idx].preview)
+                for idx in markers
+                if idx in refs_by_index
+            )
+            if supported:
+                kept.append(sent)
+            else:
+                stripped += 1
+        if kept:
+            out_paras.append(" ".join(kept))
+
+    return "\n\n".join(out_paras), stripped
+
+
+def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int]:
+    """Reassign [N] when claim text overlaps another source more strongly."""
+    refs = citation_map.refs
+    if len(refs) < 2:
+        return cleaned, 0
+
+    reassigned = 0
+
+    def _replace_sentence(sentence: str) -> str:
+        nonlocal reassigned
+        markers = list(MARKER_RE.finditer(sentence))
+        if len(markers) != 1:
+            return sentence
+        idx = int(markers[0].group(1))
+        claim = MARKER_RE.sub("", sentence).strip()
+        if len(claim) < 20:
+            return sentence
+        scores = [(r.index, _overlap_score(claim, r.preview)) for r in refs]
+        score_by_idx = dict(scores)
+        best_idx, best_score = max(scores, key=lambda x: x[1])
+        current = score_by_idx.get(idx, 0.0)
+        if best_idx != idx and best_score > current + 0.15:
+            reassigned += 1
+            return sentence[: markers[0].start()] + f"[{best_idx}]" + sentence[markers[0].end() :]
+        return sentence
+
+    parts = []
+    for para in cleaned.split("\n\n"):
+        sents = _SENTENCE_SPLIT_RE.split(para.strip()) if para.strip() else [para]
+        parts.append(" ".join(_replace_sentence(s) for s in sents if s))
+    return "\n\n".join(parts), reassigned
+
+
 def validate_response(
     answer: str,
     citation_map: CitationMap,
@@ -306,6 +429,9 @@ def validate_response(
         return ""
 
     cleaned = MARKER_RE.sub(_replace_invalid, answer)
+    cleaned, fact_stripped = _fact_verify_and_strip(cleaned, citation_map)
+    stripped += fact_stripped
+    cleaned, reassigned = _reassign_markers(cleaned, citation_map)
 
     if mode == "MULTI_CONSTRAINT" and not allow_partial_disclosure and len(citation_map.bundle_chunk_ids) > 1:
         cited_indices = {int(m.group(1)) for m in MARKER_RE.finditer(cleaned)}

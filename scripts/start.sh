@@ -18,6 +18,19 @@ fi
 source backend/.venv/bin/activate
 pip install -q -r backend/requirements.txt
 
+_hybrid=0
+if [ -f backend/.env ] && grep -qE '^[[:space:]]*ENABLE_HYBRID_SEARCH[[:space:]]*=[[:space:]]*true' backend/.env; then
+  _hybrid=1
+fi
+if [ "$_hybrid" = "1" ]; then
+  echo "Hybrid search enabled — ensuring embedding model (fastembed)..."
+  (
+    cd backend
+    export PICARD_DATA_DIR="$ROOT/.picard-data"
+    python scripts/download_embedding_model.py
+  ) || echo "Warning: embedding model download failed; hybrid search may be degraded until fixed."
+fi
+
 if [ ! -d frontend/node_modules ]; then
   (cd frontend && npm install)
 fi

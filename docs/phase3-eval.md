@@ -32,6 +32,14 @@ ENABLE_NER_ENTITY_EXTRACT=true
 
 Then run `./scripts/entity-ab.sh` (or the `source .venv/bin/activate` steps above).
 
+## RAG best practices (paper-aligned)
+
+See [rag-best-practices.md](./rag-best-practices.md). Key env flags: `ENABLE_QUERY_EXPANSION`, `ENABLE_FOCUS_EXCERPTS`, `ENABLE_HYBRID_SEARCH` (default off).
+
+```bash
+python -m pytest tests/test_focus_excerpt.py tests/test_query_expansion.py tests/test_citations.py -q
+```
+
 ## Manual (Tier C)
 
 - L-05: Click citation pill → PDF bbox aligns with text (5 samples)

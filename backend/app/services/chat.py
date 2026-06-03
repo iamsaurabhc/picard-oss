@@ -32,32 +32,6 @@ from app.services.query_understanding import understand_query, understanding_sum
 from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
 from app.services.search import execute_search
 
-_DEBUG_LOG = "/Users/saurabhc/Desktop/ai-apps/picard-oss/.cursor/debug-755b1b.log"
-
-
-def _debug_log(location: str, message: str, data: dict, hypothesis_id: str) -> None:
-    # #region agent log
-    try:
-        import time
-        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "755b1b",
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                        "hypothesisId": hypothesis_id,
-                    }
-                )
-                + "\n"
-            )
-    except OSError:
-        pass
-    # #endregion
-
-
 _GENERIC_SESSION_TITLES = frozenset({"New chat", "Assistant"})
 
 
@@ -353,19 +327,6 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             if resolved:
                 scoped_document_ids = resolved
                 retrieval_diagnostics["case_document_scope"] = resolved
-    # #region agent log
-    _debug_log(
-        "chat.py:scoped_documents",
-        "document scope for retrieval",
-        {
-            "intent": understanding.intent,
-            "case_terms": _case_name_terms(body.message) or understanding.fts.must_terms[:2],
-            "scoped_document_ids": scoped_document_ids,
-            "requested_document_ids": body.document_ids,
-        },
-        "H5-scope",
-    )
-    # #endregion
 
     if _use_carp(body, understanding):
         pool_k = body.top_k if body.top_k > settings.chat_top_k else settings.chat_retrieval_pool_k
@@ -493,27 +454,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
                 entity_types=entity_types,
                 limit=24 if is_listing else 16,
             )
-            pre_count = len(hits)
             hits = merge_search_hits(hits, entity_hits)
-            # #region agent log
-            _debug_log(
-                "chat.py:entity_enrich",
-                "entity index chunks merged pre-rank",
-                {
-                    "intent": understanding.intent,
-                    "enrich_doc_count": len(enrich_doc_ids),
-                    "entity_hits": len(entity_hits),
-                    "pool_before": pre_count,
-                    "pool_after": len(hits),
-                    "amount_entity_chunks": sum(
-                        1 for h in entity_hits if has_amount_signal(h.text_content)
-                    ),
-                    "search_pass_count": len(understanding.search_passes),
-                    "search_pass_labels": [p.label for p in understanding.search_passes],
-                },
-                "H6-H7",
-            )
-            # #endregion
 
     yield emitter.progress("rank", "start")
     ranked_hits, rank_diagnostics = rank_context(
@@ -546,25 +487,6 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     )
     retrieval_diagnostics["pages_in_context"] = sorted({h.page_number for h in hits})
     retrieval_diagnostics["documents_in_context"] = sorted({h.document_id for h in hits})
-    # #region agent log
-    pre_rank_by_doc: dict[str, int] = {}
-    for h in hits:
-        pre_rank_by_doc[h.document_id] = pre_rank_by_doc.get(h.document_id, 0) + 1
-    _debug_log(
-        "chat.py:post_rank",
-        "ranked hits before citation map",
-        {
-            "intent": understanding.intent,
-            "rank_mode": rank_mode,
-            "ranked_count": len(hits),
-            "distinct_docs": len({h.document_id for h in hits}),
-            "pages": sorted({h.page_number for h in hits}),
-            "chunks_per_doc": pre_rank_by_doc,
-            "rank_diagnostics": {k: rank_diagnostics.get(k) for k in ("used_llm", "dropped_count", "distinct_documents", "rank_mode")},
-        },
-        "H3",
-    )
-    # #endregion
     if is_listing:
         discovered = retrieval_diagnostics.get("document_ids_discovered") or []
         in_ctx = retrieval_diagnostics["documents_in_context"]
@@ -637,53 +559,6 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         db=db,
         workspace_id=body.workspace_id,
     )
-    # #region agent log
-    chunks_by_doc: dict[str, list[dict]] = {}
-    for ref in citation_map.refs:
-        chunks_by_doc.setdefault(ref.document_id, []).append(
-            {
-                "page": ref.page,
-                "preview_len": len(ref.preview or ""),
-                "has_amount": bool(
-                    re.search(r"£|pound|\d{3,}", (ref.preview or "").casefold())
-                ),
-                "preview_head": (ref.preview or "")[:120],
-            }
-        )
-    _debug_log(
-        "chat.py:post_citation_map",
-        "context assembled for LLM",
-        {
-            "intent": understanding.intent,
-            "rank_mode": rank_mode,
-            "top_k": top_k,
-            "pool_size": len(hits),
-            "excerpt_chars": excerpt_chars,
-            "chunk_count": len(citation_map.refs),
-            "pages_in_context": retrieval_diagnostics.get("pages_in_context"),
-            "documents_in_context": len(retrieval_diagnostics.get("documents_in_context") or []),
-            "documents_missing": retrieval_diagnostics.get("documents_missing_from_context"),
-            "chunks_by_doc": {k: v for k, v in list(chunks_by_doc.items())[:6]},
-            "system_prompt_chars": sum(len(r.preview or "") for r in citation_map.refs),
-            "amount_excerpt_present": any(
-                has_amount_signal(r.preview)
-                and (
-                    "£" in (r.preview or "")
-                    or "sum of" in (r.preview or "").casefold()
-                )
-                for r in citation_map.refs
-            ),
-            "benchmark_chunk_in_ctx": any(
-                r.chunk_id == "d4ae199c-81ce-4dd8-82ab-3932898a5576"
-                for r in citation_map.refs
-            ),
-            "caption_chunks": sum(
-                1 for r in citation_map.refs if r.page <= 2
-            ),
-        },
-        "H2-H5",
-    )
-    # #endregion
     target_entity = (
         understanding.target_entity.canonical if understanding.target_entity else None
     )
@@ -721,7 +596,21 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         mode=search_mode,
         allow_partial_disclosure=body.allow_partial_disclosure,
     )
-    judge_result = judge_citations(validated, citation_map)
+    judge_result = judge_citations(
+        validated,
+        citation_map,
+        intent=understanding.intent,
+    )
+    if (
+        judge_result.get("enabled")
+        and not judge_result.get("valid")
+        and settings.citation_judge_fail_closed
+        and understanding.intent in {"factual_lookup", "general"}
+    ):
+        validated = (
+            validated
+            + "\n\n_Note: Some claims could not be verified against cited sources._"
+        )
     refs = references_for_api(citation_map)
     _persist_message(
         db,

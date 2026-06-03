@@ -21,10 +21,23 @@ Sources:
 {sources}"""
 
 
-def judge_citations(answer: str, citation_map: CitationMap) -> dict:
+def judge_citations(
+    answer: str,
+    citation_map: CitationMap,
+    *,
+    intent: str = "general",
+    fail_closed: bool | None = None,
+) -> dict:
     """Optional post-synthesis SLM check: claim ↔ cited chunk alignment."""
     if not settings.enable_citation_judge:
         return {"enabled": False, "valid": True, "issues": []}
+
+    use_fail_closed = (
+        fail_closed
+        if fail_closed is not None
+        else settings.citation_judge_fail_closed
+    )
+    high_risk = intent in {"factual_lookup", "general"}
 
     if not citation_map.refs:
         return {"enabled": True, "valid": True, "issues": []}
@@ -52,17 +65,24 @@ def judge_citations(answer: str, citation_map: CitationMap) -> dict:
         temperature=0.0,
     )
     if not raw:
+        if use_fail_closed and high_risk:
+            return {"enabled": True, "valid": False, "issues": [], "skipped": "llm_unavailable"}
         return {"enabled": True, "valid": True, "issues": [], "skipped": "llm_unavailable"}
 
     try:
         start = raw.find("{")
         end = raw.rfind("}") + 1
         data = json.loads(raw[start:end])
+        valid = bool(data.get("valid", True))
+        if not valid and use_fail_closed and high_risk:
+            valid = False
         return {
             "enabled": True,
-            "valid": bool(data.get("valid", True)),
+            "valid": valid,
             "issues": data.get("issues", []),
         }
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.warning("citation judge parse failed: %s", exc)
+        if use_fail_closed and high_risk:
+            return {"enabled": True, "valid": False, "issues": [], "skipped": "parse_error"}
         return {"enabled": True, "valid": True, "issues": [], "skipped": "parse_error"}

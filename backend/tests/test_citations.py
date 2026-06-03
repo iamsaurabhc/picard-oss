@@ -123,6 +123,24 @@ def test_citation_map_surfaces_name_from_declaration_chunk():
     assert "ma x" in preview or "chester" in preview
 
 
+def test_fact_verifier_strips_unsupported_amount():
+    hit = SearchHit(
+        chunk_id="c1",
+        document_id="d1",
+        page_number=1,
+        text_content="The court discussed procedure only.",
+        heading_path=None,
+        bbox=None,
+        score=1.0,
+    )
+    cmap = build_citation_map([hit], excerpt_chars=200)
+    cmap.refs[0].preview = "The court discussed procedure only."
+    answer = "Damages were £9,999,999 [1]."
+    cleaned, validation = validate_response(answer, cmap)
+    assert "9,999,999" not in cleaned
+    assert validation.facts_stripped >= 1
+
+
 def test_factual_lookup_prompt_uses_markdown_answer_section():
     text = (
         "get under the railing. The plaintiff's son, aged seven and a half "

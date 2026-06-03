@@ -10,7 +10,11 @@ from app.db.models import Document, Entity, PageEntity
 from app.schemas import SearchHit
 from app.services.entity_index import lookup_pages_for_constraint
 from app.services.fts_query_builder import build_fts_match_string
+from app.config import settings
 from app.services.fts_search import FtsHit, fts_search, fts_search_on_pages, parse_bbox
+from app.services.hybrid_search import enrich_fts_pool_with_hybrid
+from app.services.document_context import build_document_context
+from app.services.query_expansion import expand_query, expansion_search_passes
 from app.services.query_understanding import FtsPlan, QueryUnderstanding, SearchPass
 from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
 
@@ -218,6 +222,43 @@ def planned_retrieve_with_progress(
 
     yield progress.progress("search", "start", strategy=config.strategy)
 
+    expansion_diag: dict = {}
+    if settings.enable_query_expansion and understanding.retrieval_mode != "MULTI_CONSTRAINT":
+        doc_ctx = (
+            build_document_context(
+                db,
+                workspace_id=workspace_id,
+                document_ids=document_ids,
+            )
+            if document_ids or workspace_id
+            else None
+        )
+        exp = expand_query(
+            query,
+            workspace_id=workspace_id,
+            document_context=doc_ctx,
+        )
+        expansion_diag = {"phrases": exp.phrases, "source": exp.source}
+        broad_passes = expansion_search_passes(exp.phrases)
+        for sp in broad_passes:
+            if not sp.fts_terms:
+                continue
+            yield progress.progress("search", "start", label=sp.label)
+            pass_plan = FtsPlan(must_terms=[], should_terms=sp.fts_terms, operator=sp.operator)
+            pass_fts = build_fts_match_string(pass_plan, raw_query_fallback=" ".join(sp.fts_terms))
+            pass_hits = fts_search(
+                db,
+                query=query,
+                fts_query=pass_fts,
+                workspace_id=workspace_id,
+                document_ids=document_ids,
+                top_k=config.pass_top_k,
+                max_chunks_per_doc=config.max_per_page * config.max_chunks_per_doc_multiplier,
+            )
+            _merge_hits(pool, pass_hits)
+            pass_diag.append(f"{sp.label}:{len(pass_hits)}")
+            yield progress.progress("search", "done", label=sp.label, hit_count=len(pass_hits))
+
     anchor_top_k = config.anchor_top_k or max(config.pool_k // 2, 8)
     anchor_plan = FtsPlan(
         must_terms=understanding.fts.must_terms[:2],
@@ -306,6 +347,15 @@ def planned_retrieve_with_progress(
                 yield snippet
         yield progress.progress("search", "done", label=label, hit_count=len(entity_hits))
 
+    enrich_fts_pool_with_hybrid(
+        db,
+        pool,
+        query=query,
+        workspace_id=workspace_id,
+        document_ids=document_ids,
+        pool_cap=config.pool_k * 2,
+    )
+
     merged = sorted(pool.values(), key=lambda h: h.score)
     early_thresholds = _early_page_thresholds(db, document_ids) if config.early_page_bias else {}
     diverse = _apply_page_diversity(
@@ -330,6 +380,8 @@ def planned_retrieve_with_progress(
     }
     if early_thresholds:
         diagnostics["early_page_thresholds"] = early_thresholds
+    if expansion_diag:
+        diagnostics["query_expansion"] = expansion_diag
 
     yield progress.progress("search", "done", pool_size=len(pool), hit_count=len(diverse))
     return [_fts_hit_to_search_hit(h) for h in diverse], diagnostics

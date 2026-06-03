@@ -89,6 +89,19 @@ CREATE TABLE IF NOT EXISTS page_entities (
   FOREIGN KEY (entity_id) REFERENCES entities(id)
 );
 
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+  chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  embedding_blob BLOB NOT NULL,
+  model_id TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_document
+  ON chunk_embeddings(document_id);
+
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id TEXT PRIMARY KEY,
   workspace_id TEXT,

@@ -1,3 +1,5 @@
+import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,12 +13,22 @@ from app.services.ingestion import recover_stuck_parsing_documents
 from app.services.parse_plan import check_paddleocr_server
 from app.services.storage import ensure_data_dirs
 
+logger = logging.getLogger(__name__)
+
+
+def _warm_embedding_model() -> None:
+    from app.services.chunk_embeddings import ensure_embedding_model
+
+    ensure_embedding_model()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_data_dirs()
     init_db()
     recover_stuck_parsing_documents()
+    if settings.enable_hybrid_search:
+        threading.Thread(target=_warm_embedding_model, daemon=True, name="embed-warmup").start()
     yield
 
 

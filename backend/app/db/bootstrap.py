@@ -34,6 +34,29 @@ def run_migrations(engine: Engine) -> None:
             if "document_ids_json" not in session_cols:
                 conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN document_ids_json TEXT"))
 
+        tables = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        if "chunk_embeddings" not in tables:
+            conn.execute(text("""
+                CREATE TABLE chunk_embeddings (
+                  chunk_id TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+                  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                  embedding_blob BLOB NOT NULL,
+                  model_id TEXT NOT NULL,
+                  dims INTEGER NOT NULL,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY (document_id) REFERENCES documents(id)
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_document
+                  ON chunk_embeddings(document_id)
+            """))
+
 
 def run_init_sql(engine: Engine) -> None:
     init_path = Path(__file__).parent / "init.sql"

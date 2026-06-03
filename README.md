@@ -325,7 +325,10 @@ ENABLE_LLM_QUERY_UNDERSTANDING=true
 ENABLE_CONTEXT_RANKER=true
 ENABLE_SLM_ENTITY_EXTRACT=true
 ENABLE_NER_ENTITY_EXTRACT=false    # enable after ./scripts/entity-ab.sh
+ENABLE_HYBRID_SEARCH=false         # FTS + local embeddings (fastembed)
 ```
+
+With hybrid search on, `./scripts/start.sh` downloads the ONNX embedding model into `.picard-data/models/fastembed`. Re-index existing PDFs once: `./scripts/backfill-embeddings.sh`.
 
 Chat and search **refuse** (no LLM call) when retrieval returns zero evidence — [evidence contract](docs/ARCHITECTURE.md#7-evidence-contract-adapted-from-picardlaw).
 
