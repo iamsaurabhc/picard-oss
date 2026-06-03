@@ -14,14 +14,77 @@ No Supabase, Neo4j, or cloud object storage required — documents live under `.
 
 ---
 
+## How it works locally
+
+Documents, parsed chunks, and search indexes live under `.picard-data/` on disk — no vector DB, no cloud object storage. Parsing, OCR, retrieval, and PDF bytes stay on your machine; the only optional network call is your LLM provider (OpenAI or Ollama). Every answer path ends in **one-click verification** — click a citation, jump to the bounding box on the source PDF.
+
+```mermaid
+flowchart TB
+  subgraph local [All local — no document egress]
+    upload[Upload PDF] --> parse[liteparse + OCR if scan]
+    parse --> chunks[Layout chunks + bbox]
+    chunks --> fts[SQLite FTS5 index]
+    chunks --> entities[Entity index for CARP]
+  end
+
+  fts --> search[Search: BM25 or CARP bundles]
+  entities --> search
+
+  search --> chat[Chat: citation map then stream]
+  search --> tabular[Tabular: FTS5 + LLM per cell]
+
+  chat --> verify["Click [N] → bbox highlight"]
+  tabular --> verify
+```
+
+| Stage | What happens | Why it matters |
+| ----- | ------------ | -------------- |
+| **Parse** | liteparse (LiteParse-compatible) extracts layout chunks with normalized bbox; scans use local PaddleOCR/Tesseract | Spatial provenance for every downstream citation |
+| **Index** | FTS5 BM25 + entity/page index (CARP foundation) — no embeddings | Exact legal phrases and multi-constraint queries without a vector store |
+| **Retrieve** | Search page or chat/tabular retrieval scoped to workspace | Relevance over similarity; refuse gate on zero evidence |
+| **Verify** | `[N]` pills (chat) or `p.N` pills (tabular) → `MultiHighlightPDFViewer` bbox overlay | One-click source check, not page-only guessing |
+
+**Citation chat**
+
+```
+Query → FTS5/CARP retrieve → refuse if empty → citation map [1..N] → LLM synthesize → SSE stream
+                                                                              ↓
+                                                            UI: [N] pills → PDF bbox overlay
+```
+
+**Tabular review**
+
+```
+Column prompt → FTS5 keywords → top chunks → LLM JSON cell → [[page:N||quote:…]] → same PDF panel
+```
+
+**Design choices**
+
+- **FTS5 over vectors** — "limitation of liability" beats semantically similar boilerplate from the wrong agreement
+- **CARP** — party + date + condition via page intersection, not keyword soup
+- **Evidence contract** — citations assigned before synthesis; zero evidence → refuse (no LLM call)
+- **Bbox-grounded UX** — lawyers verify specific language, not "somewhere on page 47"
+
+**Roadmap (post-v1, in development)**
+
+- Native binaries for Windows, Linux, and macOS
+- Agentic drafts — guideline docs + CSV → templated outputs for multiple parties and use cases
+- Dynamic workflows and optional web research (air-gap off by default)
+- Report extraction, compliance checks, and more
+
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/phase2-eval.md](docs/phase2-eval.md) · [docs/phase3-eval.md](docs/phase3-eval.md)
+
+---
+
 ## Contents
 
+- [How it works locally](#how-it-works-locally) — parse → index → retrieve → verify (all on your machine)
 - `[frontend/](frontend/)` — Next.js app (workspaces, search, chat, PDF viewer)
 - `[backend/](backend/)` — FastAPI API, liteparse ingestion, FTS5 + CARP, citation chat
 - `[scripts/](scripts/)` — `start.sh`, PaddleOCR sidecar, eval harness
 - `[docs/](docs/)` — Phase 2/3 evaluation guides
 - `[media/](media/)` — Demo GIF (README) and source screen recording
-- `[ARCHITECTURE.md](ARCHITECTURE.md)` — Full design blueprint
+- `[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)` — Full design blueprint
 - [Eval metrics & quality gates](#eval-metrics--quality-gates) — R/C/F/CT/FG/AB IDs (CI + per-answer UI roadmap)
 
 ---
@@ -264,7 +327,7 @@ ENABLE_SLM_ENTITY_EXTRACT=true
 ENABLE_NER_ENTITY_EXTRACT=false    # enable after ./scripts/entity-ab.sh
 ```
 
-Chat and search **refuse** (no LLM call) when retrieval returns zero evidence — [evidence contract](ARCHITECTURE.md#7-evidence-contract-adapted-from-picardlaw).
+Chat and search **refuse** (no LLM call) when retrieval returns zero evidence — [evidence contract](docs/ARCHITECTURE.md#7-evidence-contract-adapted-from-picardlaw).
 
 ---
 
@@ -356,28 +419,6 @@ Events: `retrieval` → `content` → `done` (references with chunk_id, page, bb
 
 ---
 
-## Architecture at a glance
-
-```
-Upload PDF → liteparse (+ OCR if scan) → chunks + bbox + FTS5
-                    ↓
-         entity extract → page_entities (CARP foundation)
-                    ↓
-    Search: FTS5 (keyword)  |  CARP (multi-constraint bundles)
-                    ↓
-    Chat: query plan → retrieve → refuse gate → citation map → stream
-                    ↓
-         UI: [N] pills → MultiHighlightPDFViewer (bbox overlay)
-```
-
-- **FTS5 over vectors** — exact legal phrases beat semantic neighbors for contract/litigation retrieval
-- **CARP** — page-set intersection for party + date + condition queries without Neo4j
-- **Evidence contract** — citations before synthesis; zero-evidence → refuse ([Picard.law](https://picard.law))
-
-Details: [ARCHITECTURE.md](ARCHITECTURE.md) · [docs/phase2-eval.md](docs/phase2-eval.md) · [docs/phase3-eval.md](docs/phase3-eval.md)
-
----
-
 ## Eval metrics & quality gates
 
 Picard ships **dedicated legal-retrieval metrics** — not generic embedding cosine scores. Each metric has a stable ID (R-01, C-02, CT-01, …) used in CI, gold labels, and (soon) the chat UI after every answer.
@@ -420,7 +461,7 @@ Picard ships **dedicated legal-retrieval metrics** — not generic embedding cos
 | Cross-bundle conflation (FG-02) | Layer 3 validator | post-answer warning |
 | Faithfulness / pinpoint (FG-01, CT-02) | Eval harness + manual Tier C | post-answer score (when SLM judge enabled) |
 
-Gold queries anchor to the **Chester v Municipality of Waverly** corpus (627 chunks) — e.g. `chester_bench_001` (exact damages line), `chester_carp_002` (must refuse), `chester_chat_ab01` (unanswerable chat). Full matrix: [ARCHITECTURE.md §15.2](ARCHITECTURE.md#152-evaluation-matrix-by-phase).
+Gold queries anchor to the **Chester v Municipality of Waverly** corpus (627 chunks) — e.g. `chester_bench_001` (exact damages line), `chester_carp_002` (must refuse), `chester_chat_ab01` (unanswerable chat). Full matrix: [docs/ARCHITECTURE.md §15.2](docs/ARCHITECTURE.md#152-evaluation-matrix-by-phase).
 
 ---
 
