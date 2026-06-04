@@ -1,32 +1,32 @@
 {
   "version": "0.2.0",
   "channel": "stable",
-  "released_at": "2026-06-04T08:55:05.402524+00:00",
+  "released_at": "2026-06-04T09:47:20.606681+00:00",
   "notes_url": "https://github.com/iamsaurabhc/picard-oss/releases/tag/v0.2.0",
   "platforms": {
     "darwin-aarch64": {
       "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_amd64.deb",
-      "sha256": "6925d3b92343bbabfddc8d719555825e774564bddcea0056656222fddf432b8b",
+      "sha256": "6e35ac326c96822f9f143a580b428682e405325fda1227c596b56aeb9c3759fc",
       "filename": "Picard.Law OSS_0.2.0_amd64.deb"
     },
     "darwin-x86_64": {
       "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_amd64.deb",
-      "sha256": "6925d3b92343bbabfddc8d719555825e774564bddcea0056656222fddf432b8b",
+      "sha256": "6e35ac326c96822f9f143a580b428682e405325fda1227c596b56aeb9c3759fc",
       "filename": "Picard.Law OSS_0.2.0_amd64.deb"
     },
     "windows-x86_64": {
       "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_x64-setup.exe",
-      "sha256": "182bffdce344eb85e18a21c896e4d0cc1b367c2e51ff331e4b26691821b85c18",
+      "sha256": "7edfc61a3679c20e43c8f3ee9b38d77e7948b9c0851ab6cebe8d1ff6a76caede",
       "filename": "Picard.Law OSS_0.2.0_x64-setup.exe"
     },
     "windows-i686": {
       "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_x86-setup.exe",
-      "sha256": "6467e323d2968c889b1fbb22d3875ae342a73d99b78c2c4f1eea6e8426521a1d",
+      "sha256": "722a43cd755133660cb5682c64b4ab6e7f71db453db849aeb465719e13fd8772",
       "filename": "Picard.Law OSS_0.2.0_x86-setup.exe"
     },
     "linux-x86_64": {
       "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_amd64.deb",
-      "sha256": "6925d3b92343bbabfddc8d719555825e774564bddcea0056656222fddf432b8b",
+      "sha256": "6e35ac326c96822f9f143a580b428682e405325fda1227c596b56aeb9c3759fc",
       "filename": "Picard.Law OSS_0.2.0_amd64.deb"
     }
   },
