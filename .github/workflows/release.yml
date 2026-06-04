@@ -92,10 +92,31 @@ jobs:
           PICARD_VERSION: ${{ github.ref_name }}
           PICARD_BUILD_SHA: ${{ github.sha }}
         run: bash scripts/${{ matrix.script }}
+      - name: Collect installer for artifact upload
+        run: |
+          python3 <<'PY'
+          import shutil
+          from pathlib import Path
+
+          bundle = Path("desktop/src-tauri/target/${{ matrix.target }}/release/bundle")
+          exts = {".dmg", ".exe", ".deb"}
+          installers = [
+              p for p in bundle.rglob("*")
+              if p.is_file() and p.suffix.lower() in exts
+          ]
+          if not installers:
+              raise SystemExit(f"No installer under {bundle}")
+          hit = max(installers, key=lambda p: p.stat().st_size)
+          dest = Path("release-installer")
+          dest.mkdir(exist_ok=True)
+          out = dest / hit.name
+          shutil.copy2(hit, out)
+          print(f"Installer artifact: {out} ({out.stat().st_size} bytes)")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: tauri-${{ matrix.target }}
-          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
+          path: release-installer/*
 
   manifest:
     needs: [docker, tauri]
@@ -142,13 +163,16 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           RELEASE_ASSETS_DIR: assets
         run: python3 scripts/generate_release_manifest.py
+      - name: Stage installers for GitHub Release
+        run: python3 scripts/stage_release_assets.py assets release-upload
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            assets/**
+            release-upload/*
             releases/manifest.json
           generate_release_notes: true
+          fail_on_unmatched_files: true
       - name: Export website downloads snapshot
         run: python3 scripts/export_website_downloads.py releases/manifest.json
       - name: Upload downloads snapshot
