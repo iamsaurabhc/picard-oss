@@ -1,5 +1,7 @@
 /** Tauri desktop updater bridge (no-op in browser / Docker). */
 
+import { isVersionNewer } from "@/lib/version";
+
 export function isTauriDesktop(): boolean {
   if (typeof window === "undefined") return false;
   return "__TAURI_INTERNALS__" in window;
@@ -17,6 +19,7 @@ export async function checkDesktopUpdates(): Promise<DesktopUpdateInfo | null> {
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
     if (!update) return null;
+    if (!isVersionNewer(update.version, update.currentVersion)) return null;
     return {
       version: update.version,
       currentVersion: update.currentVersion,

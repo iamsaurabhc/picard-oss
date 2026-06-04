@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import httpx
 from fastapi import APIRouter
-from packaging import version as pkg_version
 
 from app.config import settings
-from app.version import build_metadata, read_version
+from app.version import build_metadata, is_version_newer, normalize_version, read_version
 
 router = APIRouter(prefix="/updates", tags=["updates"])
 
@@ -33,17 +32,11 @@ def check_for_updates():
     except Exception:
         return result
 
-    latest = manifest.get("version", current)
+    latest = normalize_version(str(manifest.get("version", current)))
     result["latest_version"] = latest
     result["notes_url"] = manifest.get("notes_url")
     result["released_at"] = manifest.get("released_at")
-
-    try:
-        if pkg_version.parse(latest) > pkg_version.parse(current):
-            result["update_available"] = True
-    except Exception:
-        if latest != current:
-            result["update_available"] = True
+    result["update_available"] = is_version_newer(latest, current)
 
     import platform
 

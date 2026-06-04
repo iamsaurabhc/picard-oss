@@ -80,6 +80,17 @@ fn url_ok(url: &str) -> bool {
     ureq::get(url).call().map(|r| r.status() == 200).unwrap_or(false)
 }
 
+fn bundled_backend_version(bundle: &PathBuf) -> Option<String> {
+    let path = bundle.join("backend").join("version.txt");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let v = raw.trim().trim_start_matches('v').trim_start_matches('V').to_string();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
 fn spawn_backend(
     bundle: &PathBuf,
     data_dir: &PathBuf,
@@ -94,6 +105,9 @@ fn spawn_backend(
         .env("BACKEND_PORT", backend_port)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(v) = bundled_backend_version(bundle) {
+        cmd.env("PICARD_VERSION", v);
+    }
     cmd.spawn().expect("spawn backend")
 }
 

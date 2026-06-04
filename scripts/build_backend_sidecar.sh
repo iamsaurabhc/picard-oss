@@ -40,9 +40,14 @@ add_binary() {
   PYI_ARGS+=(--add-binary "$1${DATA_SEP}$2")
 }
 
+VER="${PICARD_VERSION:-$(cat VERSION 2>/dev/null || echo 0.1.0)}"
+VER="${VER#v}"
+echo "$VER" > app/defaults/version.txt
+
 PYI_ARGS=(--onedir --clean --name picard-backend)
 add_data "app/db/init.sql" "app/db"
 add_data "app/defaults/settings.json" "app/defaults"
+add_data "app/defaults/version.txt" "app/defaults"
 
 mkdir -p vendor/tessdata
 if [ ! -f vendor/tessdata/eng.traineddata ]; then
@@ -102,4 +107,5 @@ else
   cp -a dist/picard-backend/. "$RES_BACKEND/"
 fi
 chmod +x "$RES_BACKEND/picard-backend" 2>/dev/null || chmod +x "$RES_BACKEND/picard-backend.exe" 2>/dev/null || true
+echo "$VER" > "$RES_BACKEND/version.txt"
 echo "Backend onedir staged at $RES_BACKEND"

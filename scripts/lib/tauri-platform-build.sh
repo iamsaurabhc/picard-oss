@@ -69,7 +69,10 @@ cd desktop
 if [ ! -d node_modules ]; then
   npm install
 fi
-export PICARD_VERSION="$(cat "$ROOT/VERSION")"
+if [ -z "${PICARD_VERSION:-}" ]; then
+  export PICARD_VERSION="$(cat "$ROOT/VERSION")"
+fi
+export PICARD_VERSION="${PICARD_VERSION#v}"
 export PICARD_BUILD_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo local)"
 export PICARD_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

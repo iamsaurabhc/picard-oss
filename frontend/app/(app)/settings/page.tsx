@@ -8,6 +8,7 @@ import {
   type DesktopUpdateInfo,
 } from "@/lib/desktopUpdates";
 import { picardApi, type AppComponent, type AppSettings, type UpdateCheck } from "@/lib/picardApi";
+import { isVersionNewer } from "@/lib/version";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -98,7 +99,8 @@ export default function SettingsPage() {
         v{settings.version} · Data: {settings.picard_data_dir}
       </p>
 
-      {updateInfo?.update_available && (
+      {updateInfo?.update_available &&
+        isVersionNewer(updateInfo.latest_version, updateInfo.current_version) && (
         <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
           Update available: v{updateInfo.latest_version}
           {updateInfo.download_url && (
