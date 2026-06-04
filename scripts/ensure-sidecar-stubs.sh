@@ -10,6 +10,9 @@ TARGET="${1:-$(rustc -vV | sed -n 's/^host: //p')}"
 
 for name in picard-supervisor; do
   dest="$BIN/${name}-${TARGET}"
+  if [[ "$TARGET" == *windows* ]]; then
+    dest="${dest}.exe"
+  fi
   if [ ! -f "$dest" ]; then
     printf '#!/bin/sh\nexit 0\n' >"$dest"
     chmod +x "$dest"

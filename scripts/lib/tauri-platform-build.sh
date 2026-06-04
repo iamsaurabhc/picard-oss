@@ -73,6 +73,23 @@ export PICARD_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cd src-tauri
 export PATH="${HOME}/.cargo/bin:${PATH}"
 "${HOME}/.cargo/bin/cargo" build --release --bin picard-supervisor --target "$TARGET"
+
+# Tauri externalBin expects bin/picard-supervisor-{target}(.exe), not target/release/ alone.
+SUPERVISOR_BIN="bin/picard-supervisor-${TARGET}"
+SUPERVISOR_BUILT="target/${TARGET}/release/picard-supervisor"
+if [[ "$TARGET" == *windows* ]]; then
+  SUPERVISOR_BIN="${SUPERVISOR_BIN}.exe"
+  SUPERVISOR_BUILT="${SUPERVISOR_BUILT}.exe"
+fi
+if [ ! -f "$SUPERVISOR_BUILT" ]; then
+  echo "picard-supervisor build output missing: $SUPERVISOR_BUILT" >&2
+  exit 1
+fi
+mkdir -p bin
+cp -f "$SUPERVISOR_BUILT" "$SUPERVISOR_BIN"
+chmod +x "$SUPERVISOR_BIN" 2>/dev/null || true
+echo "Staged sidecar for Tauri: $SUPERVISOR_BIN"
+
 PATH="${HOME}/.cargo/bin:${PATH}" npx tauri build --target "$TARGET" --bundles "$BUNDLES"
 
 if [[ "$TARGET" == *-apple-darwin ]]; then
