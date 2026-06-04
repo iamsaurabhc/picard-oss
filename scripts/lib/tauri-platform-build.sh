@@ -76,9 +76,9 @@ export PATH="${HOME}/.cargo/bin:${PATH}"
 PATH="${HOME}/.cargo/bin:${PATH}" npx tauri build --target "$TARGET" --bundles "$BUNDLES"
 
 if [[ "$TARGET" == *-apple-darwin ]]; then
-  APP="target/${TARGET}/release/bundle/macos/Picard.app"
-  if [ -d "$APP" ]; then
-    echo "==> Ad-hoc codesign Picard.app (required for valid bundle after resource binaries)"
+  APP="$(find "target/${TARGET}/release/bundle/macos" -maxdepth 1 -name '*.app' -print -quit 2>/dev/null)"
+  if [ -n "$APP" ] && [ -d "$APP" ]; then
+    echo "==> Ad-hoc codesign $(basename "$APP") (required for valid bundle after resource binaries)"
     codesign --force --deep --sign - "$APP"
   fi
 fi

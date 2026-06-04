@@ -16,8 +16,8 @@ OUT = ROOT / "releases" / "manifest.json"
 VERSION_FILE = ROOT / "VERSION"
 
 PLATFORM_PATTERNS: dict[str, list[str]] = {
-    "darwin-aarch64": ["aarch64-apple-darwin", "aarch64.dmg", "arm64.dmg"],
-    "darwin-x86_64": ["x86_64-apple-darwin", "x64.dmg", "x86_64.dmg"],
+    "darwin-aarch64": ["aarch64-apple-darwin", "aarch64.dmg", "arm64.dmg", "picard.law oss"],
+    "darwin-x86_64": ["x86_64-apple-darwin", "x64.dmg", "x86_64.dmg", "picard.law oss"],
     "windows-x86_64": ["x86_64-pc-windows-msvc", "x64-setup", "x64.nsis"],
     "windows-i686": ["i686-pc-windows-msvc", "i686-setup", "x86-setup"],
     "linux-x86_64": ["x86_64-unknown-linux-gnu", "amd64.deb"],
