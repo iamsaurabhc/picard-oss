@@ -33,6 +33,23 @@ echo "==> Frontend production build"
 ./scripts/stage-tauri-resources.sh
 ./scripts/build_backend_sidecar.sh "$TARGET"
 
+echo "==> Prepare desktop/dist (Tauri frontendDist; webview uses localhost:3000)"
+DIST="$ROOT/desktop/dist"
+rm -rf "$DIST"
+mkdir -p "$DIST"
+cat >"$DIST/index.html" <<'HTML'
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Picard.Law OSS</title>
+  </head>
+  <body>
+    <p>Loading Picard.Law OSS…</p>
+  </body>
+</html>
+HTML
+
 echo "==> Sync tauri.conf version"
 python3 -c "
 import json

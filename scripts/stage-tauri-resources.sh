@@ -5,6 +5,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RES="$ROOT/desktop/src-tauri/resources"
 
+# Copy directory contents (portable; rsync is not on all GHA runners).
+copy_dir_contents() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p "$dst"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a "${src%/}/" "$dst/"
+  else
+    cp -a "${src%/}/." "$dst/"
+  fi
+}
+
 if [ ! -f "$ROOT/frontend/.next/standalone/server.js" ]; then
   echo "Run frontend production build first (npm run build in frontend/)." >&2
   exit 1
@@ -15,15 +27,15 @@ rm -rf "$RES/frontend" "$RES/node"
 mkdir -p "$RES/frontend" "$RES/node"
 
 # Standalone server + server chunks (no client static yet)
-rsync -a "$ROOT/frontend/.next/standalone/" "$RES/frontend/"
+copy_dir_contents "$ROOT/frontend/.next/standalone" "$RES/frontend"
 
 # Client static must land at frontend/.next/static/{css,chunks,...} — NOT static/static/
 rm -rf "$RES/frontend/.next/static"
 mkdir -p "$RES/frontend/.next"
-rsync -a "$ROOT/frontend/.next/static/" "$RES/frontend/.next/static/"
+copy_dir_contents "$ROOT/frontend/.next/static" "$RES/frontend/.next/static"
 
 if [ -d "$ROOT/frontend/public" ]; then
-  rsync -a "$ROOT/frontend/public/" "$RES/frontend/public/"
+  copy_dir_contents "$ROOT/frontend/public" "$RES/frontend/public"
 fi
 
 if [ -d "$RES/frontend/.next/static/static" ]; then
