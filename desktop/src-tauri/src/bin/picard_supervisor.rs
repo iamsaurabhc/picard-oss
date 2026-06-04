@@ -2,9 +2,8 @@
 mod agent_log {
     include!("../agent_log.rs");
 }
-mod port_cleanup {
-    include!("../port_cleanup.rs");
-}
+#[path = "../port_cleanup.rs"]
+mod port_cleanup;
 use agent_log::{agent_log, bundled_root};
 use port_cleanup::free_picard_ports;
 
