@@ -93,26 +93,8 @@ jobs:
           PICARD_BUILD_SHA: ${{ github.sha }}
         run: bash scripts/${{ matrix.script }}
       - name: Collect installer for artifact upload
-        run: |
-          python3 <<'PY'
-          import shutil
-          from pathlib import Path
-
-          bundle = Path("desktop/src-tauri/target/${{ matrix.target }}/release/bundle")
-          exts = {".dmg", ".exe", ".deb"}
-          installers = [
-              p for p in bundle.rglob("*")
-              if p.is_file() and p.suffix.lower() in exts
-          ]
-          if not installers:
-              raise SystemExit(f"No installer under {bundle}")
-          hit = max(installers, key=lambda p: p.stat().st_size)
-          dest = Path("release-installer")
-          dest.mkdir(exist_ok=True)
-          out = dest / hit.name
-          shutil.copy2(hit, out)
-          print(f"Installer artifact: {out} ({out.stat().st_size} bytes)")
-          PY
+        shell: bash
+        run: python3 scripts/collect_installer_artifact.py "${{ matrix.target }}"
       - uses: actions/upload-artifact@v4
         with:
           name: tauri-${{ matrix.target }}
