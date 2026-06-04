@@ -69,6 +69,8 @@ cd desktop && npm install && npm run tauri:dev
 
 ## Local desktop build
 
+Desktop bundles set `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` during `npm run build` (see [`scripts/lib/tauri-platform-build.sh`](../scripts/lib/tauri-platform-build.sh)) so the webview avoids macOS `localhost` → IPv6 connect delays.
+
 Requires **Rust stable >= 1.83** (`rustup update stable`). If `cargo --version` shows 1.71.x, a Homebrew/system cargo is shadowing rustup — run `export PATH="$HOME/.cargo/bin:$PATH"` first. The build script runs `ensure-rust-toolchain.sh` automatically.
 
 ```bash

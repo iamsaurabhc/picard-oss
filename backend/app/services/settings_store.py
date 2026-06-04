@@ -12,6 +12,16 @@ from app.paths import bundled_defaults_path, config_dir, resolve_picard_data_dir
 
 logger = logging.getLogger(__name__)
 
+
+def merge_cors_origins(
+    user_origins: list[str] | None,
+    default_origins: list[str] | None,
+) -> list[str]:
+    """Always include shipped desktop/webview origins; user list may omit new ports after upgrades."""
+    combined = list(user_origins or []) + list(default_origins or [])
+    return list(dict.fromkeys(combined))
+
+
 # Fields persisted in user settings.json (non-secret)
 USER_SETTING_KEYS = frozenset(
     {
@@ -89,11 +99,25 @@ def ensure_user_settings_file(data_dir: Path | None = None) -> Path:
     cfg = config_dir(data)
     cfg.mkdir(parents=True, exist_ok=True)
     path = user_settings_path(data)
+    defaults = load_shipped_defaults()
     if not path.is_file():
-        defaults = load_shipped_defaults()
         to_write = {k: v for k, v in defaults.items() if k in USER_SETTING_KEYS or k == "onboarding_complete"}
         path.write_text(json.dumps(to_write, indent=2), encoding="utf-8")
+    else:
+        _migrate_cors_origins(path, defaults)
     return path
+
+
+def _migrate_cors_origins(path: Path, defaults: dict[str, Any]) -> None:
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    merged = merge_cors_origins(current.get("cors_origins"), defaults.get("cors_origins"))
+    if merged == current.get("cors_origins"):
+        return
+    current["cors_origins"] = merged
+    path.write_text(json.dumps(current, indent=2), encoding="utf-8")
 
 
 def load_user_settings(data_dir: Path | None = None) -> dict[str, Any]:
@@ -122,8 +146,11 @@ def save_user_settings(updates: dict[str, Any], data_dir: Path | None = None) ->
 
 def merged_settings_dict(data_dir: Path | None = None) -> dict[str, Any]:
     data = data_dir or resolve_picard_data_dir()
-    merged = deepcopy(load_shipped_defaults())
-    merged.update(load_user_settings(data))
+    defaults = load_shipped_defaults()
+    user = load_user_settings(data)
+    merged = deepcopy(defaults)
+    merged.update(user)
+    merged["cors_origins"] = merge_cors_origins(user.get("cors_origins"), defaults.get("cors_origins"))
     merged["picard_data_dir"] = str(data)
     merged["database_url"] = f"sqlite:///{data / 'picard.db'}"
     return merged

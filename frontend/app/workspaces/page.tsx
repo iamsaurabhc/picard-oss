@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -12,18 +12,19 @@ import { useWorkspace } from "@/lib/workspaceContext";
 
 export default function WorkspacesPage() {
   const qc = useQueryClient();
-  const { setWorkspaceId } = useWorkspace();
+  const { setWorkspaceId, workspaces, isLoading, isError, error } = useWorkspace();
   const [name, setName] = useState("");
-  const { data: workspaces = [], isLoading } = useQuery({
-    queryKey: ["workspaces"],
-    queryFn: picardApi.listWorkspaces,
-  });
+  const [createError, setCreateError] = useState<string | null>(null);
   const create = useMutation({
     mutationFn: () => picardApi.createWorkspace({ name }),
     onSuccess: (ws) => {
+      setCreateError(null);
       setName("");
       setWorkspaceId(ws.id);
       qc.invalidateQueries({ queryKey: ["workspaces"] });
+    },
+    onError: (err) => {
+      setCreateError(err instanceof Error ? err.message : "Failed to create workspace");
     },
   });
 
@@ -39,6 +40,14 @@ export default function WorkspacesPage() {
           Create
         </Button>
       </div>
+      {createError ? <p className="mb-4 text-sm text-red-600">{createError}</p> : null}
+      {isError ? (
+        <p className="mb-4 text-sm text-red-600">
+          {error?.message?.includes("Load failed") || error?.message?.includes("Failed to fetch")
+            ? "Cannot reach the Picard API (is the backend running on port 8000?)."
+            : error?.message ?? "Failed to load workspaces."}
+        </p>
+      ) : null}
       {isLoading ? (
         <p className="text-sm text-neutral-500">Loading…</p>
       ) : (

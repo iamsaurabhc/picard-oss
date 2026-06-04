@@ -37,6 +37,21 @@ Ship **Developer ID + notarization** in [`.github/workflows/release.yml`](../.gi
 
 Releases from **v0.2.1+** (after the nested codesign fix) should open after quarantine removal or right-click Open even without notarization.
 
+## Slow UI or “can’t create workspace”
+
+**“Load failed” / empty workspaces** — often the **API is not running on 8000** (check with `curl http://127.0.0.1:8000/health`). A leftover `node` on **13130** from a previous run can make the supervisor exit and kill the backend; run `./scripts/kill-picard-ports.sh`, quit Picard (Cmd+Q), reopen.
+
+**CORS** — the UI on **13130** must be allowed by backend CORS. Ensure `~/Library/Application Support/Picard/config/settings.json` includes `http://127.0.0.1:13130` and `http://localhost:13130` under `cors_origins`, then quit and reopen Picard. Newer builds merge these automatically on startup.
+
+1. **Free ports** — quit Picard and any dev servers, then run `./scripts/kill-picard-ports.sh` (clears **8000**, **13130**, **3000**).
+2. **Check the API** — the backend has no page at `/` (404 is normal). Use:
+   ```bash
+   curl -s http://127.0.0.1:8000/health
+   curl -s -X POST http://127.0.0.1:8000/workspaces -H 'Content-Type: application/json' -d '{"name":"Test"}'
+   ```
+3. **Logs** — `~/Library/Application Support/Picard/desktop-backend.log` (PyInstaller sidecar).
+4. **Desktop UI** is on **http://127.0.0.1:13130**; the API is on **http://127.0.0.1:8000** (packaged builds bake `127.0.0.1`, not `localhost`, to avoid macOS IPv6 connect delays).
+
 ## “Application error” on 127.0.0.1
 
 Usually one of:

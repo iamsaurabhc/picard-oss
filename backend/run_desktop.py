@@ -61,12 +61,6 @@ def main() -> None:
         _configure_tiktoken_cache()
     _configure_tesseract()
     _log(f"starting backend cwd={os.getcwd()}")
-    try:
-        import litellm.litellm_core_utils.tokenizers  # noqa: F401
-
-        _log("litellm tokenizers import ok")
-    except Exception as exc:
-        _log(f"litellm tokenizers import failed: {exc}")
     from app.main import app
 
     config = uvicorn.Config(

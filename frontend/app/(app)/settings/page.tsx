@@ -20,19 +20,27 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const [s, c, u] = await Promise.all([
-      picardApi.getSettings(),
-      picardApi.getComponents(),
-      picardApi.checkForUpdates().catch(() => null),
-    ]);
+    const [s, c] = await Promise.all([picardApi.getSettings(), picardApi.getComponents()]);
     setSettings(s);
     setComponents(c.components);
-    setUpdateInfo(u);
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    picardApi
+      .checkForUpdates()
+      .then((u) => {
+        if (!cancelled) setUpdateInfo(u);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!settings) {
     return <div className="p-8 text-sm text-neutral-500">Loading settings…</div>;

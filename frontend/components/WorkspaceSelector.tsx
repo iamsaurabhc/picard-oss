@@ -6,7 +6,7 @@ import { useState } from "react";
 import { useWorkspace } from "@/lib/workspaceContext";
 
 export function WorkspaceSelector() {
-  const { workspaceId, workspace, workspaces, setWorkspaceId, isLoading } = useWorkspace();
+  const { workspaceId, workspace, workspaces, setWorkspaceId, isLoading, isError } = useWorkspace();
   const [open, setOpen] = useState(false);
 
   return (
@@ -18,7 +18,7 @@ export function WorkspaceSelector() {
         disabled={isLoading}
       >
         <span className="min-w-0 flex-1 truncate">
-          {isLoading ? "Loading…" : workspace?.name ?? "Select workspace"}
+          {isLoading ? "Loading…" : isError ? "API unavailable" : workspace?.name ?? "Select workspace"}
         </span>
         <ChevronDown className="ml-1 h-4 w-4 shrink-0 text-neutral-500" />
       </button>

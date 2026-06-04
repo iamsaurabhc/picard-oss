@@ -28,7 +28,8 @@ if [ ! -d backend/.venv ]; then
 fi
 
 echo "==> Frontend production build"
-(cd frontend && npm ci && npm run build)
+export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}"
+(cd frontend && npm ci && NEXT_PUBLIC_API_URL="$NEXT_PUBLIC_API_URL" npm run build)
 
 ./scripts/stage-tauri-resources.sh
 ./scripts/build_backend_sidecar.sh "$TARGET"

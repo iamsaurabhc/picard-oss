@@ -20,6 +20,8 @@ type WorkspaceContextValue = {
   workspaces: Workspace[];
   setWorkspaceId: (id: string | null) => void;
   isLoading: boolean;
+  isError: boolean;
+  error: Error | null;
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -29,9 +31,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceIdState] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
-  const { data: workspaces = [], isLoading: listLoading } = useQuery({
+  const {
+    data: workspaces = [],
+    isPending: listPending,
+    isError: listError,
+    error: listErrorDetail,
+  } = useQuery({
     queryKey: ["workspaces"],
     queryFn: picardApi.listWorkspaces,
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -41,7 +49,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!hydrated || listLoading) return;
+    if (!hydrated || listPending) return;
     if (workspaceId && workspaces.some((w) => w.id === workspaceId)) return;
     if (workspaces.length > 0) {
       const next = workspaces[0].id;
@@ -51,14 +59,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setWorkspaceIdState(null);
       localStorage.removeItem(STORAGE_KEY);
     }
-  }, [hydrated, listLoading, workspaceId, workspaces]);
+  }, [hydrated, listPending, workspaceId, workspaces]);
 
   const setWorkspaceId = useCallback(
     (id: string | null) => {
       setWorkspaceIdState(id);
       if (id) localStorage.setItem(STORAGE_KEY, id);
       else localStorage.removeItem(STORAGE_KEY);
-      qc.invalidateQueries();
+      // Keep the workspace list cached; refresh workspace-scoped data only.
+      qc.invalidateQueries({
+        predicate: (query) => query.queryKey[0] !== "workspaces",
+      });
     },
     [qc]
   );
@@ -75,9 +86,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       workspace: workspace ?? null,
       workspaces,
       setWorkspaceId,
-      isLoading: !hydrated || listLoading,
+      isLoading: !hydrated || listPending,
+      isError: listError,
+      error: listErrorDetail instanceof Error ? listErrorDetail : null,
     }),
-    [workspaceId, workspace, workspaces, setWorkspaceId, hydrated, listLoading]
+    [workspaceId, workspace, workspaces, setWorkspaceId, hydrated, listPending, listError, listErrorDetail]
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

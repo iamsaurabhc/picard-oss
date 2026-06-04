@@ -2,7 +2,11 @@
 mod agent_log {
     include!("../agent_log.rs");
 }
+mod port_cleanup {
+    include!("../port_cleanup.rs");
+}
 use agent_log::{agent_log, bundled_root};
+use port_cleanup::free_picard_ports;
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -73,6 +77,10 @@ fn node_exe(bundle: &PathBuf) -> PathBuf {
     }
 }
 
+fn url_ok(url: &str) -> bool {
+    ureq::get(url).call().map(|r| r.status() == 200).unwrap_or(false)
+}
+
 fn spawn_backend(
     bundle: &PathBuf,
     data_dir: &PathBuf,
@@ -112,6 +120,8 @@ fn main() {
                 return parent.join("../lib/picard/resources");
             }
         });
+
+    free_picard_ports();
 
     let bundle = bundled_root(&raw_resource);
     agent_log(
@@ -164,22 +174,33 @@ fn main() {
     if polyfill.is_file() {
         fe_cmd.arg("--require").arg(&polyfill);
     }
-    let mut fe_child = fe_cmd
-        .arg(&server_js)
-        .current_dir(&frontend_dir)
-        .env("PORT", &frontend_port)
-        .env("HOSTNAME", "127.0.0.1")
-        .env("NODE_ENV", "production")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn frontend");
-    agent_log(
-        "H3",
-        "picard_supervisor.rs:spawn_frontend",
-        "frontend spawned",
-        serde_json::json!({ "pid": fe_child.id() }),
-    );
+    let fe_url = format!("http://127.0.0.1:{frontend_port}");
+    let mut fe_child: Option<std::process::Child> = None;
+    if url_ok(&fe_url) {
+        eprintln!("picard-supervisor: reusing UI already listening on {fe_url}");
+    } else {
+        fe_child = Some(
+            fe_cmd
+                .arg(&server_js)
+                .current_dir(&frontend_dir)
+                .env("PORT", &frontend_port)
+                .env("HOSTNAME", "127.0.0.1")
+                .env("NODE_ENV", "production")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap_or_else(|e| {
+                    eprintln!("picard-supervisor: spawn frontend failed: {e}");
+                    std::process::exit(1);
+                }),
+        );
+        agent_log(
+            "H3",
+            "picard_supervisor.rs:spawn_frontend",
+            "frontend spawned",
+            serde_json::json!({ "pid": fe_child.as_ref().map(|c| c.id()) }),
+        );
+    }
 
     loop {
         thread::sleep(Duration::from_secs(2));
@@ -192,15 +213,17 @@ fn main() {
             );
             backend_child = spawn_backend(&bundle, &data_dir, &db_url, &backend_port);
         }
-        if fe_child.try_wait().ok().flatten().is_some() {
-            agent_log(
-                "H4",
-                "picard_supervisor.rs:exit",
-                "frontend exited — stopping supervisor",
-                serde_json::json!({}),
-            );
-            let _ = backend_child.kill();
-            break;
+        if let Some(ref mut child) = fe_child {
+            if child.try_wait().ok().flatten().is_some() {
+                agent_log(
+                    "H4",
+                    "picard_supervisor.rs:exit",
+                    "frontend exited — stopping supervisor",
+                    serde_json::json!({}),
+                );
+                let _ = backend_child.kill();
+                break;
+            }
         }
     }
 }

@@ -26,7 +26,7 @@ def check_for_updates():
         "released_at": None,
     }
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=2.5) as client:
             resp = client.get(manifest_url)
             resp.raise_for_status()
             manifest = resp.json()

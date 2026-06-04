@@ -207,79 +207,7 @@ def _sync_settings_in_place(target: Settings, fresh: Settings) -> None:
 def reload_settings() -> Settings:
     global settings
     fresh = _build_settings()
-    # #region agent log
-    try:
-        import json
-        import time
-
-        from app.services import model_router as _mr
-
-        with open(
-            "/Users/saurabhc/Desktop/ai-apps/picard-oss/.cursor/debug-c61648.log",
-            "a",
-            encoding="utf-8",
-        ) as _f:
-            _f.write(
-                json.dumps(
-                    {
-                        "sessionId": "c61648",
-                        "hypothesisId": "H-stale-settings",
-                        "location": "config.py:reload_settings",
-                        "message": "reload_settings in-place sync",
-                        "data": {
-                            "config_id": id(settings),
-                            "model_router_id": id(_mr.settings),
-                            "same_object_before": id(settings) == id(_mr.settings),
-                            "fresh_has_openai": bool(fresh.openai_api_key),
-                            "target_has_openai_before": bool(settings.openai_api_key),
-                        },
-                        "timestamp": int(time.time() * 1000),
-                        "runId": "post-fix",
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
     _sync_settings_in_place(settings, fresh)
-    # #region agent log
-    try:
-        import json
-        import time
-
-        from app.services import model_router as _mr
-
-        with open(
-            "/Users/saurabhc/Desktop/ai-apps/picard-oss/.cursor/debug-c61648.log",
-            "a",
-            encoding="utf-8",
-        ) as _f:
-            _f.write(
-                json.dumps(
-                    {
-                        "sessionId": "c61648",
-                        "hypothesisId": "H-stale-settings",
-                        "location": "config.py:reload_settings:after",
-                        "message": "reload_settings after sync",
-                        "data": {
-                            "same_object_after": id(settings) == id(_mr.settings),
-                            "target_has_openai_after": bool(settings.openai_api_key),
-                            "llm_available": bool(
-                                settings.openai_api_key
-                                if settings.llm_provider == "openai"
-                                else True
-                            ),
-                        },
-                        "timestamp": int(time.time() * 1000),
-                        "runId": "post-fix",
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
     return settings
 
 

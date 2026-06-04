@@ -1,11 +1,12 @@
 import logging
+import sys
 import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings as app_settings
+from app.config import reload_settings, settings as app_settings
 from app.db.session import init_db
 from app.routers import chat, documents, prompts, search, settings as settings_router, tabular, updates, workspaces
 from app.services.model_router import llm_available
@@ -19,6 +20,9 @@ from app.services.storage import ensure_data_dirs
 
 logger = logging.getLogger(__name__)
 
+# Packaged UI (13130) and dev (3000) both use loopback HTTP; regex covers stale cors_origins in settings.json.
+LOCALHOST_CORS_ORIGIN_REGEX = r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$"
+
 
 def _warm_embedding_model() -> None:
     from app.services.chunk_embeddings import ensure_embedding_model
@@ -29,13 +33,20 @@ def _warm_embedding_model() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_user_settings_file(app_settings.picard_data_dir)
+    reload_settings()
     ensure_data_dirs()
-    try:
-        ensure_tesseract_data(app_settings.picard_data_dir)
-    except Exception:
-        logger.warning("Tesseract tessdata setup failed", exc_info=True)
+    # Desktop PyInstaller entry configures tessdata in run_desktop.py before uvicorn starts.
+    if not getattr(sys, "frozen", False):
+        try:
+            ensure_tesseract_data(app_settings.picard_data_dir)
+        except Exception:
+            logger.warning("Tesseract tessdata setup failed", exc_info=True)
     init_db()
-    recover_stuck_parsing_documents()
+    threading.Thread(
+        target=recover_stuck_parsing_documents,
+        daemon=True,
+        name="recover-stuck",
+    ).start()
     if app_settings.enable_hybrid_search:
         threading.Thread(target=_warm_embedding_model, daemon=True, name="embed-warmup").start()
     yield
@@ -46,6 +57,7 @@ app = FastAPI(title="Picard-OSS", version=read_version(), lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=app_settings.cors_origins,
+    allow_origin_regex=LOCALHOST_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

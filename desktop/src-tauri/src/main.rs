@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_log;
+mod port_cleanup;
 use agent_log::{agent_log, bundled_root, resolve_resource_dir};
+use port_cleanup::free_picard_ports;
 
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -121,6 +123,7 @@ fn main() {
             );
 
             if embedded {
+                free_picard_ports();
                 let handle = app.handle().clone();
                 if let Err(e) = spawn_supervisor(&handle) {
                     agent_log(
