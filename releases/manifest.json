@@ -1,38 +1,38 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "channel": "stable",
-  "released_at": "2026-06-04T09:47:20.606681+00:00",
-  "notes_url": "https://github.com/iamsaurabhc/picard-oss/releases/tag/v0.2.0",
+  "released_at": "2026-06-04T12:32:57.751055+00:00",
+  "notes_url": "https://github.com/iamsaurabhc/picard-oss/releases/tag/v0.2.1",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_amd64.deb",
-      "sha256": "6e35ac326c96822f9f143a580b428682e405325fda1227c596b56aeb9c3759fc",
-      "filename": "Picard.Law OSS_0.2.0_amd64.deb"
+      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.1/Picard.Law OSS_0.2.0_aarch64.dmg",
+      "sha256": "fcde8645c3333859112a4855bda04ab0dfec687dc2df53dc79d8379c5dac209f",
+      "filename": "Picard.Law OSS_0.2.0_aarch64.dmg"
     },
     "darwin-x86_64": {
-      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_amd64.deb",
-      "sha256": "6e35ac326c96822f9f143a580b428682e405325fda1227c596b56aeb9c3759fc",
-      "filename": "Picard.Law OSS_0.2.0_amd64.deb"
+      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.1/Picard.Law OSS_0.2.0_x64.dmg",
+      "sha256": "6533afcc048ed60c9f862eecc2864a2460dfbf0dfda0f9f33d82cc69eb902286",
+      "filename": "Picard.Law OSS_0.2.0_x64.dmg"
     },
     "windows-x86_64": {
-      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_x64-setup.exe",
-      "sha256": "7edfc61a3679c20e43c8f3ee9b38d77e7948b9c0851ab6cebe8d1ff6a76caede",
+      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.1/Picard.Law OSS_0.2.0_x64-setup.exe",
+      "sha256": "aa3fdc1e95a2367a12640a0bfc0a24d8f0a0cdd50011563dc2fad32867699d13",
       "filename": "Picard.Law OSS_0.2.0_x64-setup.exe"
     },
     "windows-i686": {
-      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_x86-setup.exe",
-      "sha256": "722a43cd755133660cb5682c64b4ab6e7f71db453db849aeb465719e13fd8772",
+      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.1/Picard.Law OSS_0.2.0_x86-setup.exe",
+      "sha256": "e0a4c0493185144d8811e625422801d19936ee51f6b1a9f3767f673e911a1c97",
       "filename": "Picard.Law OSS_0.2.0_x86-setup.exe"
     },
     "linux-x86_64": {
-      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.0/Picard.Law OSS_0.2.0_amd64.deb",
-      "sha256": "6e35ac326c96822f9f143a580b428682e405325fda1227c596b56aeb9c3759fc",
+      "url": "https://github.com/iamsaurabhc/picard-oss/releases/download/v0.2.1/Picard.Law OSS_0.2.0_amd64.deb",
+      "sha256": "d030c4074cded35cfa5e02827237302118468d5b6130736ac57209ecb6b97633",
       "filename": "Picard.Law OSS_0.2.0_amd64.deb"
     }
   },
   "docker": {
-    "backend": "ghcr.io/iamsaurabhc/picard-oss-backend:0.2.0",
-    "frontend": "ghcr.io/iamsaurabhc/picard-oss-frontend:0.2.0"
+    "backend": "ghcr.io/iamsaurabhc/picard-oss-backend:0.2.1",
+    "frontend": "ghcr.io/iamsaurabhc/picard-oss-frontend:0.2.1"
   },
   "component_packs": {
     "gliner_model": {
