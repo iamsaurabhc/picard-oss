@@ -3,6 +3,22 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Git Bash on Windows exposes GITHUB_WORKSPACE as D:\a\...; backslashes break PyInstaller (\a, \t, …).
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT="$(cygpath -u "$ROOT")"
+else
+  ROOT="${ROOT//\\//}"
+fi
+
+posix_path() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$p"
+  else
+    echo "${p//\\//}"
+  fi
+}
+
 RES_BACKEND="$ROOT/desktop/src-tauri/resources/backend"
 
 cd "$ROOT/backend"
@@ -33,11 +49,11 @@ fi
 "$PYI_PYTHON" -m pip install -q -r requirements-core.txt pyinstaller
 
 add_data() {
-  PYI_ARGS+=(--add-data "$1${DATA_SEP}$2")
+  PYI_ARGS+=(--add-data "$(posix_path "$1")${DATA_SEP}$2")
 }
 
 add_binary() {
-  PYI_ARGS+=(--add-binary "$1${DATA_SEP}$2")
+  PYI_ARGS+=(--add-binary "$(posix_path "$1")${DATA_SEP}$2")
 }
 
 PYI_ARGS=(
@@ -71,6 +87,7 @@ if [ ! -f "$TIKTOKEN_CACHE/$CL100K_CACHE_KEY" ]; then
 fi
 add_data "$TIKTOKEN_CACHE" "tiktoken_cache"
 
+PYI_SITE="$(posix_path "$PYI_SITE")"
 if [ -f "$PYI_SITE/liteparse/libpdfium.dylib" ]; then
   add_binary "$PYI_SITE/liteparse/libpdfium.dylib" "liteparse"
 elif [ -f "$PYI_SITE/liteparse/pdfium.dll" ]; then
