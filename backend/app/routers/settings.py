@@ -37,6 +37,7 @@ class SettingsOut(BaseModel):
     picard_data_dir: str
     onboarding_complete: bool
     show_prompts_in_chat: bool
+    agent_profile: str
     update_channel: str
     release_manifest_url: str
     llm_configured: bool
@@ -61,6 +62,7 @@ class SettingsUpdate(BaseModel):
     liteparse_ocr_server_url: str | None = None
     onboarding_complete: bool | None = None
     show_prompts_in_chat: bool | None = None
+    agent_profile: str | None = None
     update_channel: str | None = None
     release_manifest_url: str | None = None
 
@@ -93,6 +95,7 @@ def _settings_to_out(s: Settings) -> SettingsOut:
         picard_data_dir=str(s.picard_data_dir),
         onboarding_complete=s.onboarding_complete,
         show_prompts_in_chat=s.show_prompts_in_chat,
+        agent_profile=s.agent_profile,
         update_channel=s.update_channel,
         release_manifest_url=s.release_manifest_url,
         llm_configured=llm_available(),

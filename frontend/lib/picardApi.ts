@@ -83,6 +83,7 @@ export type AppSettings = {
   picard_data_dir: string;
   onboarding_complete: boolean;
   show_prompts_in_chat: boolean;
+  agent_profile: string;
   update_channel: string;
   release_manifest_url: string;
   llm_configured: boolean;
@@ -107,7 +108,54 @@ export type AppSettingsUpdate = {
   liteparse_ocr_server_url?: string | null;
   onboarding_complete?: boolean;
   show_prompts_in_chat?: boolean;
+  agent_profile?: string;
   update_channel?: string;
+};
+
+export type WorkflowType = "assistant" | "tabular" | "lightflow";
+export type WorkflowProfile = "firm" | "court" | "any";
+
+export type WorkflowRecord = {
+  id: string;
+  workspace_id: string | null;
+  type: WorkflowType;
+  title: string;
+  practice_area: string | null;
+  prompt_md: string | null;
+  columns_config: TabularColumn[] | null;
+  flow_json: {
+    version: string;
+    input_hint?: string;
+    steps: Array<{
+      name: string;
+      role: string;
+      depends_on?: string[];
+      refuse_on_empty?: boolean;
+      config?: Record<string, unknown>;
+    }>;
+  };
+  flow_version: string;
+  input_schema: Record<string, unknown> | null;
+  evidence_profile: {
+    requires_corpus?: boolean;
+    allowed_intents?: string[];
+    allows_tabular?: boolean;
+    allows_csv?: boolean;
+    allows_web?: boolean;
+    denied_roles?: string[];
+  };
+  profile: WorkflowProfile;
+  source: string;
+  requires_approval: boolean;
+  is_builtin: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkflowValidation = {
+  valid: boolean;
+  errors: Array<{ level: string; code: string; message: string; step?: string | null }>;
+  warnings: Array<{ level: string; code: string; message: string; step?: string | null }>;
 };
 
 export type AppComponent = {
@@ -253,6 +301,7 @@ export type ChatStreamRequest = {
   allow_partial_disclosure?: boolean;
   top_k?: number;
   tabular_review_id?: string;
+  workflow_id?: string;
 };
 
 export type ColumnFormat =
@@ -601,5 +650,27 @@ export const picardApi = {
       }
       if (done) break;
     }
+  },
+  listWorkflows: (params?: {
+    workspace_id?: string;
+    type?: WorkflowType;
+    practice_area?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.workspace_id) qs.set("workspace_id", params.workspace_id);
+    if (params?.type) qs.set("type", params.type);
+    if (params?.practice_area) qs.set("practice_area", params.practice_area);
+    const q = qs.toString();
+    return request<WorkflowRecord[]>(`/workflows${q ? `?${q}` : ""}`);
+  },
+  getWorkflow: (id: string) => request<WorkflowRecord>(`/workflows/${id}`),
+  validateWorkflow: (id: string) =>
+    request<WorkflowValidation>(`/workflows/${id}/validate`, { method: "POST" }),
+  hideWorkflow: (id: string) =>
+    request<void>(`/workflows/${id}/hide`, { method: "POST" }),
+  exportWorkflow: async (id: string) => {
+    const res = await fetch(`${API_URL}/workflows/${id}/export`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<WorkflowRecord>;
   },
 };

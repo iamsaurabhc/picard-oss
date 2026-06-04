@@ -189,6 +189,7 @@ class ChatStreamRequest(BaseModel):
     allow_partial_disclosure: bool = False
     top_k: int = 12
     tabular_review_id: str | None = None
+    workflow_id: str | None = None
 
 
 ColumnFormat = Literal[
@@ -276,3 +277,54 @@ class TabularBatchGenerateRequest(BaseModel):
     document_ids: list[str] | None = None
     column_keys: list[str] | None = None
     only_pending: bool = True
+
+
+WorkflowType = Literal["assistant", "tabular", "lightflow"]
+WorkflowProfile = Literal["firm", "court", "any"]
+
+
+class WorkflowValidationIssueOut(BaseModel):
+    level: Literal["error", "warning"] = "error"
+    code: str
+    message: str
+    step: str | None = None
+
+
+class WorkflowValidationOut(BaseModel):
+    valid: bool
+    errors: list[WorkflowValidationIssueOut] = Field(default_factory=list)
+    warnings: list[WorkflowValidationIssueOut] = Field(default_factory=list)
+
+
+class WorkflowOut(BaseModel):
+    id: str
+    workspace_id: str | None = None
+    type: WorkflowType
+    title: str
+    practice_area: str | None = None
+    prompt_md: str | None = None
+    columns_config: list[dict] | None = None
+    flow_json: dict
+    flow_version: str
+    input_schema: dict | None = None
+    evidence_profile: dict
+    profile: WorkflowProfile
+    source: str
+    requires_approval: bool
+    is_builtin: bool
+    created_at: str
+    updated_at: str
+
+
+class WorkflowCreate(BaseModel):
+    workspace_id: str | None = None
+    type: WorkflowType
+    title: str = Field(min_length=1, max_length=200)
+    practice_area: str | None = None
+    prompt_md: str | None = None
+    columns_config: list[TabularColumn] | None = None
+    flow_json: dict
+    input_schema: dict | None = None
+    evidence_profile: dict
+    profile: WorkflowProfile = "any"
+    requires_approval: bool = False

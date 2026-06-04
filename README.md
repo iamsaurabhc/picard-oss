@@ -58,6 +58,10 @@ Query → FTS5/CARP retrieve → refuse if empty → citation map [1..N] → LLM
 Column prompt → FTS5 keywords → top chunks → LLM JSON cell → [[page:N||quote:…]] → same PDF panel
 ```
 
+**Workflow library (Phase 6)**
+
+Built-in assistant and tabular playbooks ship as validated **LightFlow `flow_json`** DAGs (~18 built-ins). Browse them under **Workflows** in the sidebar: filter by type, preview the step graph, validate, export JSON, or hide built-ins. Attach an **assistant workflow** in Chat to pin CARP intent and add playbook guidance; start a **tabular workflow** when creating a review to copy preset columns. **Run** and **Edit in Agent** are disabled until Phase 7b/7a. Set **Deployment profile** (firm/court) in Settings to filter incompatible built-ins.
+
 **Design choices**
 
 - **FTS5 over vectors** — "limitation of liability" beats semantically similar boilerplate from the wrong agreement
@@ -69,7 +73,8 @@ Column prompt → FTS5 keywords → top chunks → LLM JSON cell → [[page:N||q
 
 - Native binaries for Windows, Linux, and macOS
 - Agentic drafts — guideline docs + CSV → templated outputs for multiple parties and use cases
-- Dynamic workflows and optional web research (air-gap off by default)
+- LightFlow workflow **execution** and agent authoring (Phase 7)
+- Optional web research (air-gap off by default)
 - Report extraction, compliance checks, and more
 
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/phase2-eval.md](docs/phase2-eval.md) · [docs/phase3-eval.md](docs/phase3-eval.md)

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { TabularColumn } from "@/lib/picardApi";
-import { picardApi } from "@/lib/picardApi";
+import { picardApi, type WorkflowRecord } from "@/lib/picardApi";
 import {
   mixedDocTypeWarning,
   TABULAR_TEMPLATES,
@@ -22,6 +22,7 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
   const [title, setTitle] = useState("Contract review");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [templateId, setTemplateId] = useState<TabularTemplateId>("contract");
+  const [workflowId, setWorkflowId] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
   const template = TABULAR_TEMPLATES.find((t) => t.id === templateId) ?? TABULAR_TEMPLATES[0];
@@ -29,6 +30,12 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
   const { data: documents = [] } = useQuery({
     queryKey: ["documents", workspaceId],
     queryFn: () => picardApi.listDocuments(workspaceId),
+    enabled: open,
+  });
+
+  const { data: tabularWorkflows = [] } = useQuery({
+    queryKey: ["workflows", workspaceId, "tabular"],
+    queryFn: () => picardApi.listWorkflows({ workspace_id: workspaceId, type: "tabular" }),
     enabled: open,
   });
 
@@ -42,9 +49,14 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
   useEffect(() => {
     if (open) {
       setTemplateId("contract");
+      setWorkflowId("");
       setTitle(TABULAR_TEMPLATES[0].defaultTitle);
     }
   }, [open]);
+
+  const selectedWorkflow: WorkflowRecord | undefined = tabularWorkflows.find(
+    (w) => w.id === workflowId
+  );
 
   if (!open) return null;
 
@@ -52,7 +64,16 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
     const t = TABULAR_TEMPLATES.find((x) => x.id === id);
     if (!t) return;
     setTemplateId(id);
+    setWorkflowId("");
     setTitle(t.defaultTitle);
+  }
+
+  function selectWorkflow(id: string) {
+    setWorkflowId(id);
+    const w = tabularWorkflows.find((x) => x.id === id);
+    if (w?.columns_config?.length) {
+      setTitle(w.title);
+    }
   }
 
   async function handleCreate() {
@@ -60,7 +81,10 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
     if (!docIds.length) return;
     setSaving(true);
     try {
-      const columns: TabularColumn[] = template.columns;
+      const columns: TabularColumn[] =
+        selectedWorkflow?.columns_config?.length
+          ? selectedWorkflow.columns_config
+          : template.columns;
       const review = await picardApi.createTabularReview({
         workspace_id: workspaceId,
         title: title.trim() || template.defaultTitle,
@@ -84,6 +108,23 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
+        {tabularWorkflows.length > 0 && (
+          <>
+            <p className="mb-2 text-xs font-medium text-neutral-600">Start from workflow</p>
+            <select
+              className="mb-4 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
+              value={workflowId}
+              onChange={(e) => selectWorkflow(e.target.value)}
+            >
+              <option value="">Use template preset below</option>
+              {tabularWorkflows.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.title}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <p className="mb-2 text-xs font-medium text-neutral-600">Template</p>
         <div className="mb-4 max-h-56 space-y-2 overflow-y-auto">
           {TABULAR_TEMPLATES.map((t) => (
@@ -105,7 +146,8 @@ export function AddNewTRModal({ open, workspaceId, onClose, onCreated }: Props) 
           ))}
         </div>
         <p className="mb-2 text-xs text-neutral-500">
-          Columns: {template.columns.map((c) => c.label).join(", ")}
+          Columns:{" "}
+          {(selectedWorkflow?.columns_config ?? template.columns).map((c) => c.label).join(", ")}
         </p>
         <p className="mb-2 text-xs font-medium text-neutral-600">Documents (parsed PDFs only)</p>
         <div className="mb-4 max-h-48 overflow-y-auto rounded border border-neutral-200">

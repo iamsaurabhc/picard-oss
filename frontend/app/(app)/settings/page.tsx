@@ -63,6 +63,7 @@ export default function SettingsPage() {
         enable_ner_entity_extract: s.enable_ner_entity_extract,
         enable_slm_entity_extract: s.enable_slm_entity_extract,
         show_prompts_in_chat: s.show_prompts_in_chat,
+        agent_profile: s.agent_profile,
         update_channel: s.update_channel,
       });
       setSettings(next);
@@ -159,6 +160,21 @@ export default function SettingsPage() {
         >
           Save API keys
         </button>
+      </section>
+
+      <section className="mt-8 space-y-3">
+        <h2 className="text-sm font-medium text-neutral-800">Deployment profile</h2>
+        <p className="text-xs text-neutral-500">
+          Filters built-in workflows in the library (firm vs court).
+        </p>
+        <select
+          className="w-full rounded border border-neutral-300 px-3 py-2 text-sm"
+          value={settings.agent_profile}
+          onChange={(e) => setSettings({ ...settings, agent_profile: e.target.value })}
+        >
+          <option value="firm">Firm</option>
+          <option value="court">Court</option>
+        </select>
       </section>
 
       <section className="mt-8 space-y-2">

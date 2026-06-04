@@ -12,6 +12,11 @@ const NAV = [
   { href: "/tabular", label: "Tabular", match: (p: string) => p === "/tabular" || p.startsWith("/tabular/") },
   { href: "/search", label: "Search", match: (p: string) => p === "/search" || p.startsWith("/search/") },
   { href: "/chat", label: "Chat", match: (p: string) => p === "/chat" || p.startsWith("/chat/") },
+  {
+    href: "/workflows",
+    label: "Workflows",
+    match: (p: string) => p === "/workflows" || p.startsWith("/workflows/"),
+  },
   { href: "/settings", label: "Settings", match: (p: string) => p === "/settings" },
 ] as const;
 

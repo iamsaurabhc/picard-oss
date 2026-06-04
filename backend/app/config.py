@@ -146,6 +146,7 @@ class Settings(BaseSettings):
     update_channel: str = "stable"
     onboarding_complete: bool = False
     show_prompts_in_chat: bool = False
+    agent_profile: str = "firm"
     release_manifest_url: str = Field(
         default="https://raw.githubusercontent.com/iamsaurabhc/picard-oss/gh-pages/releases/manifest.json",
         validation_alias="PICARD_RELEASE_MANIFEST_URL",

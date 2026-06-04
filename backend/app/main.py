@@ -8,7 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import reload_settings, settings as app_settings
 from app.db.session import init_db
-from app.routers import chat, documents, prompts, search, settings as settings_router, tabular, updates, workspaces
+from app.routers import (
+    chat,
+    documents,
+    prompts,
+    search,
+    settings as settings_router,
+    tabular,
+    updates,
+    workflows,
+    workspaces,
+)
 from app.services.model_router import llm_available
 from app.services.settings_store import ensure_user_settings_file
 from app.version import build_metadata, read_version
@@ -71,6 +81,7 @@ app.include_router(tabular.router)
 app.include_router(settings_router.router)
 app.include_router(prompts.router)
 app.include_router(updates.router)
+app.include_router(workflows.router)
 
 
 @app.get("/health")

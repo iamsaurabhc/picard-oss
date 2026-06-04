@@ -79,6 +79,7 @@ USER_SETTING_KEYS = frozenset(
         "update_channel",
         "onboarding_complete",
         "show_prompts_in_chat",
+        "agent_profile",
     }
 )
 

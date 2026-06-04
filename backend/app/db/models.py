@@ -179,3 +179,34 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class Workflow(Base):
+    __tablename__ = "workflows"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    workspace_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True
+    )
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    practice_area: Mapped[str | None] = mapped_column(String, nullable=True)
+    prompt_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+    columns_config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    flow_json: Mapped[str] = mapped_column(Text, nullable=False)
+    flow_version: Mapped[str] = mapped_column(String, default="lightflow-0.8")
+    input_schema_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_profile_json: Mapped[str] = mapped_column(Text, nullable=False)
+    profile: Mapped[str] = mapped_column(String, default="any")
+    source: Mapped[str] = mapped_column(String, default="builtin")
+    requires_approval: Mapped[int] = mapped_column(Integer, default=0)
+    is_builtin: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class HiddenWorkflow(Base):
+    __tablename__ = "hidden_workflows"
+
+    workflow_id: Mapped[str] = mapped_column(String, primary_key=True)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)

@@ -78,6 +78,7 @@ export default function ChatPage() {
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
+  const [workflowId, setWorkflowId] = useState<string>("");
   const streamingRef = useRef(false);
   const initRef = useRef(false);
   const initInFlightRef = useRef(false);
@@ -90,6 +91,12 @@ export default function ChatPage() {
   const { data: documents } = useQuery({
     queryKey: ["documents", ws],
     queryFn: () => picardApi.listDocuments(ws!),
+    enabled: !!ws,
+  });
+
+  const { data: assistantWorkflows = [] } = useQuery({
+    queryKey: ["workflows", ws, "assistant"],
+    queryFn: () => picardApi.listWorkflows({ workspace_id: ws!, type: "assistant" }),
     enabled: !!ws,
   });
 
@@ -325,6 +332,7 @@ export default function ChatPage() {
         workspace_id: ws,
         message: userText,
         document_ids: documentIds.length ? documentIds : undefined,
+        workflow_id: workflowId || undefined,
       })) {
         if (ev.event === "error") {
           throw new Error(ev.detail);
@@ -401,6 +409,19 @@ export default function ChatPage() {
           selectedIds={scopedDocumentIds}
           onChange={setDocumentIds}
         />
+        <select
+          className="max-w-xs rounded border border-neutral-300 px-2 py-1.5 text-sm"
+          value={workflowId}
+          onChange={(e) => setWorkflowId(e.target.value)}
+          title="Optional assistant workflow — pins retrieval intent and system guidance"
+        >
+          <option value="">No workflow</option>
+          {assistantWorkflows.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.title}
+            </option>
+          ))}
+        </select>
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">

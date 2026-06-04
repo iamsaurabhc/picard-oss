@@ -60,5 +60,6 @@
     "tauri://localhost"
   ],
   "update_channel": "stable",
-  "onboarding_complete": false
+  "onboarding_complete": false,
+  "agent_profile": "firm"
 }

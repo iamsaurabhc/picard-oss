@@ -58,6 +58,48 @@ def run_migrations(engine: Engine) -> None:
                   ON chunk_embeddings(document_id)
             """))
 
+        if "workflows" not in tables:
+            conn.execute(text("""
+                CREATE TABLE workflows (
+                  id TEXT PRIMARY KEY,
+                  workspace_id TEXT,
+                  type TEXT NOT NULL,
+                  title TEXT NOT NULL,
+                  practice_area TEXT,
+                  prompt_md TEXT,
+                  columns_config_json TEXT,
+                  flow_json TEXT NOT NULL,
+                  flow_version TEXT DEFAULT 'lightflow-0.8',
+                  input_schema_json TEXT,
+                  evidence_profile_json TEXT NOT NULL,
+                  profile TEXT DEFAULT 'any',
+                  source TEXT DEFAULT 'builtin',
+                  requires_approval INTEGER DEFAULT 0,
+                  is_builtin INTEGER DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_workflows_workspace ON workflows(workspace_id)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_workflows_type ON workflows(type)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_workflows_profile ON workflows(profile)
+            """))
+
+        if "hidden_workflows" not in tables:
+            conn.execute(text("""
+                CREATE TABLE hidden_workflows (
+                  workflow_id TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  PRIMARY KEY (workflow_id)
+                )
+            """))
+
 
 def _init_sql_path() -> Path:
     rel = Path(__file__).parent / "init.sql"

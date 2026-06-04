@@ -160,6 +160,38 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TEXT NOT NULL
 );
 
+-- Phase 6: workflow library
+CREATE TABLE IF NOT EXISTS workflows (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  practice_area TEXT,
+  prompt_md TEXT,
+  columns_config_json TEXT,
+  flow_json TEXT NOT NULL,
+  flow_version TEXT DEFAULT 'lightflow-0.8',
+  input_schema_json TEXT,
+  evidence_profile_json TEXT NOT NULL,
+  profile TEXT DEFAULT 'any',
+  source TEXT DEFAULT 'builtin',
+  requires_approval INTEGER DEFAULT 0,
+  is_builtin INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS hidden_workflows (
+  workflow_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (workflow_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_workspace ON workflows(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workflows_type ON workflows(type);
+CREATE INDEX IF NOT EXISTS idx_workflows_profile ON workflows(profile);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_chunks_document_page ON chunks(document_id, page_number);
 CREATE INDEX IF NOT EXISTS idx_chunks_document_section ON chunks(document_id, section_key);

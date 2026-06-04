@@ -283,7 +283,23 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     if not session:
         raise ValueError("Session not found")
 
-    _persist_message(db, session_id=body.session_id, role="user", content=body.message)
+    workflow_id = body.workflow_id
+    workflow_prompt: str | None = None
+    persist_message = body.message
+    if workflow_id:
+        from app.services.workflows_store import (
+            get_workflow,
+            workflow_message_marker,
+            workflow_prompt_prefix,
+        )
+
+        wf = get_workflow(db, workflow_id)
+        workflow_prompt = workflow_prompt_prefix(wf)
+        marker = workflow_message_marker(wf)
+        if marker not in persist_message:
+            persist_message = f"{marker}\n\n{persist_message}"
+
+    _persist_message(db, session_id=body.session_id, role="user", content=persist_message)
     _touch_session_after_user_turn(db, session, body)
 
     emitter = RetrievalProgressEmitter(
@@ -299,6 +315,20 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         workspace_id=body.workspace_id,
         document_ids=body.document_ids,
     )
+    if workflow_id:
+        from app.services.workflows_store import (
+            apply_workflow_intent_hint,
+            get_workflow,
+            get_workflow_allowed_intents,
+            get_workflow_intent_hint,
+        )
+
+        wf = get_workflow(db, workflow_id)
+        understanding = apply_workflow_intent_hint(
+            understanding,
+            get_workflow_intent_hint(wf),
+            get_workflow_allowed_intents(wf),
+        )
     is_overview = understanding.intent == "case_overview"
     is_listing = understanding.intent == "entity_matter_listing"
 
@@ -635,6 +665,8 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             "Structured metadata from the active tabular review was applied per document during mapping.\n\n"
             + system_prompt
         )
+    if workflow_prompt:
+        system_prompt = f"{workflow_prompt}\n\n---\n\n{system_prompt}"
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": body.message},

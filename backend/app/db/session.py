@@ -36,6 +36,14 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 def init_db() -> None:
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     run_init_sql(engine)
+    from app.services.workflows_store import seed_builtin_workflows
+
+    db = SessionLocal()
+    try:
+        seed_builtin_workflows(db)
+        db.commit()
+    finally:
+        db.close()
 
 
 def get_db() -> Generator[Session, None, None]:
