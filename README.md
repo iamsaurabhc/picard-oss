@@ -157,6 +157,8 @@ cd desktop && npm install && npm run tauri:build
 
 Releases publish to GitHub with a [`releases/manifest.json`](releases/manifest.json) for download pages and in-app updates.
 
+**macOS:** If Gatekeeper says the app is “damaged”, see [`docs/MACOS_INSTALL.md`](docs/MACOS_INSTALL.md) (quarantine / first open — not a bad DMG).
+
 ### Settings in the app
 
 Use **Settings** in the sidebar (or the first-run wizard) to enter API keys and preferences locally. Keys are stored encrypted under your data directory and are never returned by the API.

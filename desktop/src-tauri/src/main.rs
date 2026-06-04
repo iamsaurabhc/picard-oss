@@ -134,7 +134,7 @@ fn main() {
                 }
 
                 let backend_ok = wait_for_url("http://127.0.0.1:8000/health", 120);
-                let frontend_ok = wait_for_url("http://127.0.0.1:3000", 120);
+                let frontend_ok = wait_for_url("http://127.0.0.1:13130", 120);
                 agent_log(
                     "H4",
                     "main.rs:setup",

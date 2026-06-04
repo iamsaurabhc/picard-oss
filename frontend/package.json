@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "bash ../scripts/copy-pdf-worker.sh",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -15,7 +16,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.553.0",
     "next": "^15.2.4",
-    "pdfjs-dist": "^4.8.69",
+    "pdfjs-dist": "4.8.69",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",

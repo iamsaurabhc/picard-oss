@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from generate_release_manifest import PLATFORM_PATTERNS, find_asset
+from generate_release_manifest import PLATFORM_EXTENSIONS, PLATFORM_PATTERNS, find_asset
 
 
 def main() -> int:
@@ -25,7 +25,7 @@ def main() -> int:
 
     staged: list[Path] = []
     for platform, patterns in PLATFORM_PATTERNS.items():
-        hit = find_asset(src, patterns)
+        hit = find_asset(src, patterns, PLATFORM_EXTENSIONS[platform])
         if not hit:
             print(f"No installer for {platform}", file=sys.stderr)
             continue

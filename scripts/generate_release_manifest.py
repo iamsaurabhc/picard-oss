@@ -15,9 +15,17 @@ TEMPLATE = ROOT / "releases" / "manifest.template.json"
 OUT = ROOT / "releases" / "manifest.json"
 VERSION_FILE = ROOT / "VERSION"
 
+PLATFORM_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    "darwin-aarch64": (".dmg",),
+    "darwin-x86_64": (".dmg",),
+    "windows-x86_64": (".exe", ".msi"),
+    "windows-i686": (".exe", ".msi"),
+    "linux-x86_64": (".deb",),
+}
+
 PLATFORM_PATTERNS: dict[str, list[str]] = {
-    "darwin-aarch64": ["aarch64-apple-darwin", "aarch64.dmg", "arm64.dmg", "picard.law oss"],
-    "darwin-x86_64": ["x86_64-apple-darwin", "x64.dmg", "x86_64.dmg", "picard.law oss"],
+    "darwin-aarch64": ["aarch64-apple-darwin", "aarch64.dmg", "arm64.dmg"],
+    "darwin-x86_64": ["x86_64-apple-darwin", "x64.dmg", "x86_64.dmg"],
     "windows-x86_64": ["x86_64-pc-windows-msvc", "x64-setup", "x64.nsis"],
     "windows-i686": ["i686-pc-windows-msvc", "i686-setup", "x86-setup"],
     "linux-x86_64": ["x86_64-unknown-linux-gnu", "amd64.deb"],
@@ -32,15 +40,16 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def find_asset(adir: Path, patterns: list[str]) -> Path | None:
+def find_asset(adir: Path, patterns: list[str], extensions: tuple[str, ...]) -> Path | None:
     files = sorted(adir.rglob("*"), key=lambda p: p.stat().st_size if p.is_file() else 0, reverse=True)
     for f in files:
         if not f.is_file():
             continue
         name = f.name.lower()
+        if not name.endswith(extensions):
+            continue
         if any(p.lower() in name for p in patterns):
-            if name.endswith((".dmg", ".exe", ".deb", ".msi", ".app.tar.gz")):
-                return f
+            return f
     return None
 
 
@@ -60,7 +69,7 @@ def main() -> int:
     if assets_dir:
         adir = Path(assets_dir)
         for platform, patterns in PLATFORM_PATTERNS.items():
-            hit = find_asset(adir, patterns)
+            hit = find_asset(adir, patterns, PLATFORM_EXTENSIONS[platform])
             if hit:
                 manifest["platforms"][platform] = {
                     "url": f"{base_url}/{hit.name}",

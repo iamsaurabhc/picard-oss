@@ -50,7 +50,7 @@ cat >"$DIST/index.html" <<'HTML'
 </html>
 HTML
 
-echo "==> Sync tauri.conf version"
+echo "==> Sync tauri.conf version + production webview URL"
 python3 -c "
 import json
 from pathlib import Path
@@ -58,6 +58,8 @@ v = Path('VERSION').read_text().strip()
 p = Path('desktop/src-tauri/tauri.conf.json')
 c = json.loads(p.read_text())
 c['version'] = v
+# Packaged app serves Next on 13130; dev/tauri dev use :3000 (see devUrl).
+c['app']['windows'][0]['url'] = 'http://127.0.0.1:13130'
 p.write_text(json.dumps(c, indent=2) + '\n')
 "
 
@@ -95,7 +97,6 @@ PATH="${HOME}/.cargo/bin:${PATH}" npx tauri build --target "$TARGET" --bundles "
 if [[ "$TARGET" == *-apple-darwin ]]; then
   APP="$(find "target/${TARGET}/release/bundle/macos" -maxdepth 1 -name '*.app' -print -quit 2>/dev/null)"
   if [ -n "$APP" ] && [ -d "$APP" ]; then
-    echo "==> Ad-hoc codesign $(basename "$APP") (required for valid bundle after resource binaries)"
-    codesign --force --deep --sign - "$APP"
+    bash "$ROOT/scripts/codesign-macos-app.sh" "$APP" -
   fi
 fi

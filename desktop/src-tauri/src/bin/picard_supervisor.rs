@@ -129,7 +129,8 @@ fn main() {
     std::fs::create_dir_all(&data_dir).ok();
 
     let backend_port = std::env::var("BACKEND_PORT").unwrap_or_else(|_| "8000".into());
-    let frontend_port = std::env::var("FRONTEND_PORT").unwrap_or_else(|_| "3000".into());
+    // 13130 avoids colliding with `next dev` / Docker on :3000 when the desktop app runs.
+    let frontend_port = std::env::var("FRONTEND_PORT").unwrap_or_else(|_| "13130".into());
     let db_url = format!("sqlite:///{}", data_dir.join("picard.db").display());
 
     let backend = backend_exe(&bundle);
@@ -158,7 +159,12 @@ fn main() {
     }
 
     let node = node_exe(&bundle);
-    let mut fe_child = Command::new(&node)
+    let polyfill = frontend_dir.join("node-polyfills.cjs");
+    let mut fe_cmd = Command::new(&node);
+    if polyfill.is_file() {
+        fe_cmd.arg("--require").arg(&polyfill);
+    }
+    let mut fe_child = fe_cmd
         .arg(&server_js)
         .current_dir(&frontend_dir)
         .env("PORT", &frontend_port)

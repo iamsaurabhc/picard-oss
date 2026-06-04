@@ -6,7 +6,8 @@ import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import { documentFileUrl } from "@/lib/picardApi";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Must match react-pdf's pdfjs-dist (see scripts/copy-pdf-worker.sh). Version pinned in package.json.
+pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
 type Props = {
   documentId: string;

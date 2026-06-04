@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "identifier": "law.picard.oss",
   "build": {
-    "beforeDevCommand": "cd ../../frontend && npm run dev",
+    "beforeDevCommand": "bash ../scripts/tauri-before-dev.sh",
     "devUrl": "http://127.0.0.1:3000",
     "beforeBuildCommand": "echo 'frontend built by platform scripts'",
     "frontendDist": "../dist"
@@ -19,7 +19,7 @@
         "height": 800,
         "resizable": true,
         "visible": false,
-        "url": "http://127.0.0.1:3000"
+        "url": "http://127.0.0.1:13130"
       }
     ],
     "security": {

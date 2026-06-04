@@ -8,7 +8,7 @@ export DATABASE_URL="sqlite:///$PICARD_DATA_DIR/picard.db"
 mkdir -p "$PICARD_DATA_DIR"
 
 BACKEND_PORT="${BACKEND_PORT:-8000}"
-FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+FRONTEND_PORT="${FRONTEND_PORT:-13130}"
 
 # Backend
 if [ -d "$BUNDLE_ROOT/backend/.venv" ]; then

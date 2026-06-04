@@ -48,7 +48,20 @@ if ! find "$RES/frontend/.next/static/css" -name '*.css' -print -quit 2>/dev/nul
 fi
 
 NODE_BIN="$(command -v node)"
+NODE_MAJOR="$("$NODE_BIN" -p "process.versions.node.split('.')[0]")"
+if [ "${NODE_MAJOR:-0}" -lt 22 ]; then
+  echo "ERROR: Node 22+ required for desktop bundle (pdfjs / Next 15); got $("$NODE_BIN" -v)" >&2
+  exit 1
+fi
 cp "$NODE_BIN" "$RES/node/node"
 chmod +x "$RES/node/node"
-echo "Bundled node from $NODE_BIN"
+cp "$ROOT/frontend/node-polyfills.cjs" "$RES/frontend/node-polyfills.cjs"
+bash "$ROOT/scripts/copy-pdf-worker.sh"
+if [ -f "$ROOT/frontend/public/pdf.worker.min.mjs" ]; then
+  mkdir -p "$RES/frontend/public"
+  cp "$ROOT/frontend/public/pdf.worker.min.mjs" "$RES/frontend/public/pdf.worker.min.mjs"
+else
+  echo "WARN: pdf.worker.min.mjs missing — run npm install in frontend/" >&2
+fi
+echo "Bundled node from $NODE_BIN ($("$NODE_BIN" -v))"
 echo "Staged static CSS: $(find "$RES/frontend/.next/static/css" -name '*.css' | wc -l | tr -d ' ') files"

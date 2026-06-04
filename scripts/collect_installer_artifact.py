@@ -24,8 +24,8 @@ def main() -> int:
         return 1
 
     hit = max(installers, key=lambda p: p.stat().st_size)
-    dest = Path("release-installer")
-    dest.mkdir(exist_ok=True)
+    dest = Path("release-installer") / target
+    dest.mkdir(parents=True, exist_ok=True)
     out = dest / hit.name
     shutil.copy2(hit, out)
     print(f"Installer artifact: {out} ({out.stat().st_size} bytes)")

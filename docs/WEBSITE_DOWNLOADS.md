@@ -40,6 +40,10 @@ export async function getDownloadLinks() {
 
 Show version label `v{m.version}` and fallback link to GitHub Releases latest.
 
+## macOS download note
+
+Link directly to the GitHub Release `.dmg` (e.g. `Picard.Law.OSS_0.2.0_aarch64.dmg`). After install, users may see Gatekeeper’s **“damaged”** dialog — that is quarantine + unsigned OSS builds, not a bad file. Add a short note linking to [`MACOS_INSTALL.md`](MACOS_INSTALL.md) in the legaldocx download section.
+
 ## CI automation
 
 After each tagged release, [`release.yml`](../.github/workflows/release.yml) runs:

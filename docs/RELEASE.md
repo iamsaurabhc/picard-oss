@@ -26,7 +26,7 @@ Regenerate Tauri + web favicons:
 2. Build Tauri bundles (macOS arm64/x64, Windows EXE, Linux DEB).
 3. Generate [`releases/manifest.json`](../releases/manifest.json) with download URLs and SHA256.
 4. Publish manifest to `gh-pages` at `https://raw.githubusercontent.com/iamsaurabhc/picard-oss/gh-pages/releases/manifest.json`.
-5. Attach artifacts to GitHub Release.
+5. Prune any existing assets on the GitHub Release, then attach installers + `manifest.json` only.
 
 ## Tauri updater signing
 
@@ -38,6 +38,12 @@ cd desktop && npx tauri signer generate -w ~/.picard-updater.key
 
 Store the private key in CI as `TAURI_SIGNING_PRIVATE_KEY` for release builds.
 
+## macOS Gatekeeper (“damaged” dialog)
+
+OSS CI builds are ad-hoc signed until Apple credentials are configured. Users who download from the website or GitHub may need to clear quarantine or use **right-click → Open** once. See [`docs/MACOS_INSTALL.md`](MACOS_INSTALL.md).
+
+CI runs [`scripts/codesign-macos-app.sh`](../scripts/codesign-macos-app.sh) after each macOS bundle (nested Mach-O sign, not `codesign --deep` on the `.app` alone).
+
 ## Code signing (production)
 
 | Platform | Requirement |
@@ -45,6 +51,21 @@ Store the private key in CI as `TAURI_SIGNING_PRIVATE_KEY` for release builds.
 | macOS | Developer ID + notarization (`APPLE_CERTIFICATE`, `APPLE_ID`, `APPLE_PASSWORD`) |
 | Windows | Authenticode (`WINDOWS_CERTIFICATE`) |
 | Tauri updater | Generate keypair: `tauri signer generate`; set pubkey in `desktop/src-tauri/tauri.conf.json` |
+
+## Tauri dev (native shell + hot-reload UI)
+
+Two terminals:
+
+```bash
+# Terminal 1 — API
+cd backend && source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# Terminal 2 — webview + Next dev (:3000)
+cd desktop && npm install && npm run tauri:dev
+```
+
+`tauri dev` starts `next dev` via [`scripts/tauri-before-dev.sh`](../scripts/tauri-before-dev.sh) and opens the desktop window at `http://127.0.0.1:3000` (must match `devUrl` and `app.windows[].url` in `tauri.conf.json`). The Rust shell does **not** spawn the production sidecar in debug mode (see `Picard dev:` in the console). Release builds patch the window URL to `:13130` in [`scripts/lib/tauri-platform-build.sh`](../scripts/lib/tauri-platform-build.sh).
 
 ## Local desktop build
 
