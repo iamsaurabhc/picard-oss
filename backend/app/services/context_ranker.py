@@ -10,6 +10,7 @@ from app.schemas import SearchHit
 from app.services.excerpt_selector import has_amount_signal, has_identity_signal, identity_signal_strength
 from app.services.fts_search import _chunk_is_informative
 from app.services.model_router import ModelRole, completion
+from app.services.prompt_registry import get_prompt
 from app.services.query_understanding import QueryUnderstanding, SearchPass, SubQuestion
 
 logger = logging.getLogger(__name__)
@@ -417,12 +418,10 @@ def rank_context(
     for h in hits[:40]:
         chunk_lines.append(f"- {h.chunk_id} | p{h.page_number} | {_chunk_preview(h)}")
 
-    if rank_mode == "listing":
-        prompt_template = COVERAGE_RANKER_PROMPT
-    elif rank_mode == "coverage":
-        prompt_template = COVERAGE_RANKER_PROMPT
+    if rank_mode in {"listing", "coverage"}:
+        prompt_template = get_prompt("coverage_ranker")
     else:
-        prompt_template = RANKER_PROMPT
+        prompt_template = get_prompt("context_ranker")
     prompt_kwargs = {
         "intent": understanding.intent,
         "question": question,

@@ -6,10 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.schemas import SearchHit
-from app.services.entity_index import (
-    lookup_documents_for_party,
-    lookup_pages_for_party_in_document,
-)
+from app.services.entity_index import lookup_pages_for_party_in_document
+from app.services.listing_discovery import discover_listing_documents
 from app.services.pass_retrieval import run_search_passes_for_document
 from app.services.planned_retrieval import _fts_hit_to_search_hit
 from app.services.query_understanding import QueryUnderstanding, SearchPass
@@ -76,6 +74,7 @@ def entity_listing_retrieve_with_progress(
     workspace_id: str,
     document_ids: list[str] | None = None,
     query: str = "",
+    tabular_review_id: str | None = None,
     emitter: RetrievalProgressEmitter | None = None,
 ) -> Iterator[dict]:
     """Entity-first retrieval: discover documents, then run planner passes per document."""
@@ -90,13 +89,13 @@ def entity_listing_retrieve_with_progress(
 
     yield progress.progress("search", "start", strategy="entity_matter_listing")
 
-    max_docs = settings.chat_listing_max_docs
-    doc_rows = lookup_documents_for_party(
+    doc_rows, discovery_diag = discover_listing_documents(
         db,
-        workspace_id,
-        canonicals,
-        document_ids,
-        limit=max_docs,
+        understanding,
+        workspace_id=workspace_id,
+        document_ids=document_ids,
+        query=query,
+        tabular_review_id=tabular_review_id,
     )
     yield progress.progress(
         "search",
@@ -104,7 +103,33 @@ def entity_listing_retrieve_with_progress(
         label="document_discovery",
         documents_discovered=len(doc_rows),
         target_entity=target.canonical if target else None,
+        discovery_sources=discovery_diag.get("discovery_sources"),
     )
+
+    document_ids_discovered = [d for d, _ in doc_rows]
+    from app.services.listing_map_reduce import should_use_listing_map_reduce
+
+    if should_use_listing_map_reduce(
+        document_ids_discovered,
+        tabular_review_id=tabular_review_id,
+        db=db,
+    ):
+        diagnostics = {
+            "retrieval_strategy": "entity_matter_listing",
+            "target_entity": target.canonical if target else None,
+            "resolved_canonicals": canonicals,
+            "documents_discovered": len(doc_rows),
+            "documents_total_discovered": discovery_diag.get(
+                "documents_total_discovered", len(doc_rows),
+            ),
+            "document_ids_discovered": document_ids_discovered,
+            "discovery_sources": discovery_diag.get("discovery_sources"),
+            "pool_size": 0,
+            "diverse_size": 0,
+            "skipped_pool_for_map_reduce": True,
+        }
+        yield progress.progress("search", "done", pool_size=0, hit_count=0, strategy="listing_map_reduce")
+        return [], diagnostics
 
     search_passes = list(understanding.search_passes)
     if not search_passes:
@@ -203,12 +228,41 @@ def entity_listing_retrieve_with_progress(
         doc_order=doc_order,
     )
 
+    rescue_note: str | None = None
+    if not diverse:
+        from app.services.query_understanding import FtsPlan, _case_name_terms
+
+        case_terms = _case_name_terms(query)
+        if case_terms:
+            from app.services.fts_query_builder import build_fts_match_string
+            from app.services.fts_search import fts_search
+
+            plan = FtsPlan(must_terms=case_terms[:2], operator="AND")
+            fts_q = build_fts_match_string(plan, raw_query_fallback=" ".join(case_terms))
+
+            rescue_hits = fts_search(
+                db,
+                query=" ".join(case_terms),
+                fts_query=fts_q,
+                workspace_id=workspace_id,
+                document_ids=document_ids,
+                top_k=settings.chat_listing_pool_k,
+                max_chunks_per_doc=chunks_per_doc,
+            )
+            diverse = [_fts_hit_to_search_hit(h) for h in rescue_hits]
+            if diverse:
+                rescue_note = "case_name_fts_fallback"
+
     diagnostics = {
         "retrieval_strategy": "entity_matter_listing",
         "target_entity": target.canonical if target else None,
         "resolved_canonicals": canonicals,
         "documents_discovered": len(doc_rows),
+        "documents_total_discovered": discovery_diag.get(
+            "documents_total_discovered", len(doc_rows),
+        ),
         "document_ids_discovered": [d for d, _ in doc_rows],
+        "discovery_sources": discovery_diag.get("discovery_sources"),
         "pages_per_doc": {k: v[:20] for k, v in pages_per_doc.items()},
         "per_doc_fts_hits": per_doc_hits,
         "pool_size": len(pool),
@@ -216,6 +270,8 @@ def entity_listing_retrieve_with_progress(
         "search_pass_labels": [p.label for p in search_passes],
         "search_pass_count": len(search_passes),
     }
+    if rescue_note:
+        diagnostics["rescue"] = rescue_note
     yield progress.progress("search", "done", pool_size=len(pool), hit_count=len(diverse))
     return [_fts_hit_to_search_hit(h) for h in diverse], diagnostics
 

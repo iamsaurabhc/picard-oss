@@ -1,0 +1,14 @@
+{
+  "name": "picard-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "build:dmg": "bash ../scripts/build-dmg-macos-arm64.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

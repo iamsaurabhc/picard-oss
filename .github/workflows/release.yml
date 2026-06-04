@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build backend image
+        run: |
+          docker build -f backend/Dockerfile \
+            --build-arg INSTALL_ML=false \
+            -t ${{ env.REGISTRY }}/${{ github.repository }}-backend:${{ steps.ver.outputs.version }} \
+            ./backend
+          docker push ${{ env.REGISTRY }}/${{ github.repository }}-backend:${{ steps.ver.outputs.version }}
+      - name: Build frontend image
+        run: |
+          docker build -f frontend/Dockerfile \
+            --build-arg NEXT_PUBLIC_API_URL=http://localhost:8000 \
+            -t ${{ env.REGISTRY }}/${{ github.repository }}-frontend:${{ steps.ver.outputs.version }} \
+            ./frontend
+          docker push ${{ env.REGISTRY }}/${{ github.repository }}-frontend:${{ steps.ver.outputs.version }}
+
+  tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            script: build-dmg-macos-arm64.sh
+          - platform: macos-13
+            target: x86_64-apple-darwin
+            script: build-dmg-macos-x64.sh
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            script: build-deb-linux-amd64.sh
+          - platform: ubuntu-22.04
+            target: i686-unknown-linux-gnu
+            script: build-deb-linux-i386.sh
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            script: build-exe-windows-x64.sh
+          - platform: windows-latest
+            target: i686-pc-windows-msvc
+            script: build-exe-windows-x86.sh
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Linux i386 deps
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+      - name: Build desktop bundle
+        shell: bash
+        env:
+          PICARD_VERSION: ${{ github.ref_name }}
+          PICARD_BUILD_SHA: ${{ github.sha }}
+        run: bash scripts/${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-${{ matrix.target }}
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**
+
+  manifest:
+    needs: [docker, tauri]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Generate manifest
+        env:
+          PICARD_VERSION: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          RELEASE_ASSETS_DIR: release-assets
+        run: python3 scripts/generate_release_manifest.py
+      - name: Publish gh-pages manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: releases
+          destination_dir: releases
+          keep_files: false
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [manifest, tauri]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Regenerate manifest for release assets
+        env:
+          PICARD_VERSION: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          RELEASE_ASSETS_DIR: assets
+        run: python3 scripts/generate_release_manifest.py
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/**
+            releases/manifest.json
+          generate_release_notes: true
+      - name: Export website downloads snapshot
+        run: python3 scripts/export_website_downloads.py releases/manifest.json
+      - name: Upload downloads snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-downloads-json
+          path: website/downloads.example.json
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker compose smoke
+        run: |
+          docker compose up -d --wait
+          curl -sf http://localhost:8000/health
+          curl -sf http://localhost:8000/version
+          docker compose down

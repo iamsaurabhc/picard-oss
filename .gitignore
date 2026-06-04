@@ -33,3 +33,5 @@ frontend/out/
 *.egg-info/
 dist/
 build/
+backend/vendor/tessdata/*.traineddata
+backend/vendor/tiktoken_cache/*

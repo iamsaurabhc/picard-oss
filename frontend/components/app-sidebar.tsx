@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -11,6 +12,7 @@ const NAV = [
   { href: "/tabular", label: "Tabular", match: (p: string) => p === "/tabular" || p.startsWith("/tabular/") },
   { href: "/search", label: "Search", match: (p: string) => p === "/search" || p.startsWith("/search/") },
   { href: "/chat", label: "Chat", match: (p: string) => p === "/chat" || p.startsWith("/chat/") },
+  { href: "/settings", label: "Settings", match: (p: string) => p === "/settings" },
 ] as const;
 
 export function AppSidebar() {
@@ -18,9 +20,15 @@ export function AppSidebar() {
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-neutral-200 bg-white p-4">
-      <div className="mb-2 font-serif text-xl" style={{ fontFamily: "var(--font-garamond), serif" }}>
-        Picard.Law OSS
-      </div>
+      <Link href="/" className="mb-3 flex items-center gap-2">
+        <Image src="/picard.svg" alt="Picard.Law OSS" width={28} height={28} className="shrink-0" />
+        <span
+          className="min-w-0 font-serif text-sm leading-tight text-neutral-900"
+          style={{ fontFamily: "var(--font-garamond), serif" }}
+        >
+          Picard.Law OSS
+        </span>
+      </Link>
       <WorkspaceSelector />
       <nav className="flex flex-col gap-1 text-sm">
         {NAV.map(({ href, label, match }) => {

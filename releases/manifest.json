@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "channel": "stable",
+  "released_at": "2026-01-01T00:00:00Z",
+  "notes_url": "https://github.com/iamsaurabhc/picard-oss/releases/latest",
+  "platforms": {
+    "darwin-aarch64": { "url": "", "sha256": "" },
+    "darwin-x86_64": { "url": "", "sha256": "" },
+    "windows-x86_64": { "url": "", "sha256": "" },
+    "windows-i686": { "url": "", "sha256": "" },
+    "linux-x86_64": { "url": "", "sha256": "" },
+    "linux-i686": { "url": "", "sha256": "" }
+  },
+  "docker": {
+    "backend": "ghcr.io/iamsaurabhc/picard-oss-backend:0.2.0",
+    "frontend": "ghcr.io/iamsaurabhc/picard-oss-frontend:0.2.0"
+  },
+  "component_packs": {
+    "gliner_model": { "url": "", "sha256": "" }
+  }
+}

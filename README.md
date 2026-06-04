@@ -122,6 +122,45 @@ Picard uses **SQLite on disk** — no external database to provision. On first r
 
 `start.sh` pins data to the repo root (`.picard-data/`). Override with `PICARD_DATA_DIR` in `backend/.env` if needed.
 
+Installed builds use OS-default paths (`~/Library/Application Support/Picard` on macOS, etc.) — see [`backend/app/paths.py`](backend/app/paths.py).
+
+---
+
+## Distribution (Docker, desktop, updates)
+
+### Docker Compose
+
+```bash
+docker compose up --build
+# Optional OCR: docker compose --profile ocr up --build
+# Optional ML deps in image: INSTALL_ML=true docker compose build backend
+```
+
+Open [http://localhost:3000](http://localhost:3000). Data persists in the `picard-data` volume.
+
+### Production supervisor (local)
+
+```bash
+chmod +x scripts/picard-supervisor.sh
+./scripts/picard-supervisor.sh
+```
+
+Runs FastAPI + Next.js standalone (no hot reload).
+
+### Desktop installers
+
+Build Tauri bundles (DMG / EXE / DEB) — see [`docs/RELEASE.md`](docs/RELEASE.md):
+
+```bash
+cd desktop && npm install && npm run tauri:build
+```
+
+Releases publish to GitHub with a [`releases/manifest.json`](releases/manifest.json) for download pages and in-app updates.
+
+### Settings in the app
+
+Use **Settings** in the sidebar (or the first-run wizard) to enter API keys and preferences locally. Keys are stored encrypted under your data directory and are never returned by the API.
+
 ---
 
 ## Environment

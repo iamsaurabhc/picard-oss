@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Picard.Law OSS",
+  "version": "0.2.0",
+  "identifier": "law.picard.oss",
+  "build": {
+    "beforeDevCommand": "cd ../../frontend && npm run dev",
+    "devUrl": "http://127.0.0.1:3000",
+    "beforeBuildCommand": "echo 'frontend built by platform scripts'",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Picard.Law OSS",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "visible": false,
+        "url": "http://127.0.0.1:3000"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' http://127.0.0.1:* http://localhost:*; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' http://127.0.0.1:* http://localhost:* data: blob:; style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:* http://localhost:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "bin/picard-supervisor"
+    ],
+    "resources": [
+      "resources/frontend/",
+      "resources/node/",
+      "resources/backend/"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGRlc2NyaXB0aW9uOiBQaWNhcmQgT1NTIHVwZGF0ZSBzaWduaW5nIGtleSAoZ2VuZXJhdGUgd2l0aCB0YXVyaSBzaWduZXIp",
+      "endpoints": [
+        "https://raw.githubusercontent.com/iamsaurabhc/picard-oss/gh-pages/releases/manifest.json"
+      ]
+    }
+  }
+}

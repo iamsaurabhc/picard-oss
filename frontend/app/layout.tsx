@@ -7,8 +7,12 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const garamond = EB_Garamond({ subsets: ["latin"], variable: "--font-garamond" });
 
 export const metadata: Metadata = {
-  title: "Picard-OSS",
+  title: "Picard.Law OSS",
   description: "Local-first legal document assistant",
+  icons: {
+    icon: "/icon.png",
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

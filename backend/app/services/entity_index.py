@@ -76,15 +76,18 @@ def resolve_party_canonicals(
         )
     ).all()
 
+    primary_cf = primary.casefold() if primary else ""
     for cv in rows:
+        cv_cf = cv.casefold()
         if cv == canonical:
             matched.add(cv)
             continue
-        if any(s.casefold() == cv or s.casefold() in cv or cv in s.casefold() for s in surfaces):
+        if any(s.casefold() == cv_cf or s.casefold() in cv_cf or cv_cf in s.casefold() for s in surfaces):
             matched.add(cv)
             continue
-        if primary and primary in cv and (len(tokens) <= 1 or all(t in cv for t in tokens)):
-            matched.add(cv)
+        if primary_cf and primary_cf in cv_cf:
+            if len(tokens) <= 1 or all(t.casefold() in cv_cf for t in tokens):
+                matched.add(cv)
     if canonical and not matched:
         matched.add(canonical)
     return sorted(matched)
@@ -120,6 +123,68 @@ def lookup_documents_for_party(
         stmt = stmt.where(PageEntity.document_id.in_(document_ids))
     rows = db.execute(stmt).all()
     return [(r[0], int(r[1])) for r in rows]
+
+
+def lookup_documents_for_party_tokens(
+    db: Session,
+    workspace_id: str,
+    tokens: list[str],
+    document_ids: list[str] | None = None,
+    *,
+    limit: int = 64,
+) -> list[tuple[str, int]]:
+    """Documents with party entities whose canonical contains any token (substring match)."""
+    from app.db.models import Entity, PageEntity
+
+    from sqlalchemy import or_
+
+    cleaned = [t.strip() for t in tokens if t and len(t.strip()) > 2]
+    if not cleaned:
+        return []
+
+    token_filters = [
+        Entity.canonical_value.ilike(f"%{t}%") for t in cleaned[:6]
+    ]
+    stmt = (
+        select(PageEntity.document_id, func.sum(PageEntity.mention_count).label("cnt"))
+        .join(Entity, Entity.id == PageEntity.entity_id)
+        .where(
+            Entity.workspace_id == workspace_id,
+            Entity.entity_type == "party",
+            or_(*token_filters),
+        )
+        .group_by(PageEntity.document_id)
+        .order_by(func.sum(PageEntity.mention_count).desc())
+        .limit(limit)
+    )
+    if document_ids:
+        stmt = stmt.where(PageEntity.document_id.in_(document_ids))
+    rows = db.execute(stmt).all()
+    return [(r[0], int(r[1])) for r in rows]
+
+
+def count_documents_for_party(
+    db: Session,
+    workspace_id: str,
+    canonical_values: list[str],
+    document_ids: list[str] | None = None,
+) -> int:
+    """Distinct documents mentioning any party canonical (unlimited for manifest totals)."""
+    from app.db.models import Entity, PageEntity
+
+    if not canonical_values:
+        return 0
+
+    stmt = select(func.count(func.distinct(PageEntity.document_id))).select_from(PageEntity).join(
+        Entity, Entity.id == PageEntity.entity_id
+    ).where(
+        Entity.workspace_id == workspace_id,
+        Entity.entity_type == "party",
+        Entity.canonical_value.in_(canonical_values),
+    )
+    if document_ids:
+        stmt = stmt.where(PageEntity.document_id.in_(document_ids))
+    return int(db.scalar(stmt) or 0)
 
 
 def lookup_pages_for_party_in_document(

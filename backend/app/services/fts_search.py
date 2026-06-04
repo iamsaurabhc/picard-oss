@@ -129,6 +129,44 @@ def _sanitize_fts_query(query: str) -> str:
     return " ".join(substantive)
 
 
+def fts_discover_documents(
+    db: Session,
+    *,
+    fts_query: str,
+    workspace_id: str,
+    document_ids: list[str] | None = None,
+    limit: int = 64,
+) -> list[tuple[str, int]]:
+    """Distinct documents with chunk hits for an FTS query, ordered by hit count."""
+    if not fts_query or not fts_query.strip():
+        return []
+
+    sql_parts = [
+        """
+        SELECT c.document_id, COUNT(*) AS hit_count
+        FROM chunks_fts
+        JOIN chunks c ON c.rowid = chunks_fts.rowid
+        JOIN documents d ON d.id = c.document_id
+        WHERE chunks_fts MATCH :q
+          AND d.workspace_id = :ws
+        """,
+    ]
+    params: dict = {"q": fts_query, "ws": workspace_id, "limit": limit}
+
+    if document_ids:
+        placeholders = ", ".join(f":doc_{i}" for i in range(len(document_ids)))
+        sql_parts.append(f"AND c.document_id IN ({placeholders})")
+        for i, doc_id in enumerate(document_ids):
+            params[f"doc_{i}"] = doc_id
+
+    sql_parts.append(
+        "GROUP BY c.document_id ORDER BY hit_count DESC LIMIT :limit"
+    )
+    stmt = text("".join(sql_parts))
+    rows = db.execute(stmt, params).mappings().all()
+    return [(row["document_id"], int(row["hit_count"])) for row in rows]
+
+
 def fts_search(
     db: Session,
     *,

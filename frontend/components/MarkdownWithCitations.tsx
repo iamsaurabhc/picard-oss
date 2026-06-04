@@ -117,10 +117,13 @@ function makeCitationComponents(
   byIndex: Map<number, ChatReference>,
   onCitationClick?: (ref: ChatReference) => void
 ): Components {
-  const wrap =
-    (Tag: keyof React.JSX.IntrinsicElements): Components[string] =>
-    ({ children, ...props }) =>
-      <Tag {...props}>{injectCitations(children, byIndex, onCitationClick)}</Tag>;
+  const wrap = (
+    Tag: "p" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "blockquote" | "strong" | "em"
+  ) =>
+    ({ children, ...props }: { children?: React.ReactNode }) => {
+      const El = Tag;
+      return <El {...props}>{injectCitations(children, byIndex, onCitationClick)}</El>;
+    };
 
   return {
     p: wrap("p"),

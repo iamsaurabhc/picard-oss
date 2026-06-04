@@ -70,6 +70,7 @@ class OcrHealthOut(BaseModel):
     server_url: str | None
     reachable: bool
     engine: str
+    tesseract_ready: bool = False
 
 
 class DocumentRetryAllOut(BaseModel):

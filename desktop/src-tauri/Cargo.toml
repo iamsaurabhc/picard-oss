@@ -1,0 +1,31 @@
+[package]
+name = "picard-desktop"
+version = "0.2.0"
+description = "Picard OSS — local legal document assistant"
+authors = ["Picard"]
+edition = "2021"
+default-run = "picard-desktop"
+
+[[bin]]
+name = "picard-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", default-features = false, features = ["json"] }
+
+[[bin]]
+name = "picard-supervisor"
+path = "src/bin/picard_supervisor.rs"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

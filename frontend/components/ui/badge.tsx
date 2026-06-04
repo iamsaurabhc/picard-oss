@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const styles: Record<string, string> = {
@@ -8,8 +9,15 @@ const styles: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
+  const active = status === "pending" || status === "parsing";
   return (
-    <span className={cn("rounded px-2 py-0.5 text-xs font-medium capitalize", styles[status] ?? styles.pending)}>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium capitalize",
+        styles[status] ?? styles.pending
+      )}
+    >
+      {active ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : null}
       {status}
     </span>
   );

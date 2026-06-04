@@ -1,15 +1,30 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.paths import resolve_picard_data_dir
+from app.services.secrets_store import load_secrets
+from app.services.settings_store import merged_settings_dict
+
+
+def _default_data_dir() -> Path:
+    return resolve_picard_data_dir()
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    picard_data_dir: Path = Path(".picard-data")
-    database_url: str = "sqlite:///.picard-data/picard.db"
-    cors_origins: list[str] = ["http://localhost:3000"]
+    picard_data_dir: Path = Field(default_factory=_default_data_dir)
+    database_url: str = ""
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "tauri://localhost",
+    ]
 
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
@@ -20,7 +35,7 @@ class Settings(BaseSettings):
     enable_tiered_models: bool = False
     enable_llm_query_understanding: bool = Field(
         default=True,
-        validation_alias="ENABLE_LLM_QUERY_UNDERSTANDING",
+        validation_alias=AliasChoices("ENABLE_LLM_QUERY_UNDERSTANDING", "ENABLE_QUERY_EXPANSION"),
     )
     enable_query_expansion: bool = Field(
         default=True,
@@ -88,6 +103,12 @@ class Settings(BaseSettings):
     chat_listing_min_chunks_per_doc: int = 2
     chat_listing_chunks_per_doc: int = 4
     chat_listing_max_docs: int = 12
+    enable_listing_map_reduce: bool = True
+    chat_listing_map_chunks_per_doc: int = 4
+    chat_listing_map_max_docs: int = 12
+    chat_listing_map_excerpt_chars: int = 1200
+    chat_listing_discovery_always_fts: bool = True
+    chat_listing_discovery_doc_limit: int = 64
     carp_top_k_bundles: int = 8
 
     enable_context_expansion: bool = True
@@ -108,7 +129,7 @@ class Settings(BaseSettings):
     entity_ner_max_pages: int = 0
 
     liteparse_ocr_server_url: str | None = Field(
-        default="http://localhost:8829/ocr",
+        default=None,
         validation_alias=AliasChoices("LITEPARSE_OCR_SERVER_URL", "PADDLE_OCR_SERVER_URL"),
     )
     liteparse_ocr_language: str = Field(
@@ -119,6 +140,14 @@ class Settings(BaseSettings):
     liteparse_dpi_ocr: float = Field(default=300.0, validation_alias="LITEPARSE_DPI_OCR")
     liteparse_min_chars_per_page: int = Field(default=25, validation_alias="LITEPARSE_MIN_CHARS_PER_PAGE")
     liteparse_require_paddleocr: bool = Field(default=False, validation_alias="LITEPARSE_REQUIRE_PADDLEOCR")
+
+    update_channel: str = "stable"
+    onboarding_complete: bool = False
+    show_prompts_in_chat: bool = False
+    release_manifest_url: str = Field(
+        default="https://raw.githubusercontent.com/iamsaurabhc/picard-oss/gh-pages/releases/manifest.json",
+        validation_alias="PICARD_RELEASE_MANIFEST_URL",
+    )
 
     @property
     def db_path(self) -> Path:
@@ -142,4 +171,114 @@ class Settings(BaseSettings):
         return self.picard_data_dir / "models" / "fastembed"
 
 
-settings = Settings()
+def _build_settings() -> Settings:
+    data_dir = resolve_picard_data_dir()
+    os.environ.setdefault("PICARD_DATA_DIR", str(data_dir))
+    merged = merged_settings_dict(data_dir)
+    if not merged.get("database_url"):
+        merged["database_url"] = f"sqlite:///{data_dir / 'picard.db'}"
+    if isinstance(merged.get("picard_data_dir"), str):
+        merged["picard_data_dir"] = Path(merged["picard_data_dir"])
+    # Env vars still override via pydantic when we construct Settings()
+    s = Settings(**{k: v for k, v in merged.items() if k in Settings.model_fields})
+    secrets = load_secrets(data_dir)
+    if secrets.get("openai_api_key"):
+        s.openai_api_key = secrets["openai_api_key"]
+    if secrets.get("anthropic_api_key"):
+        s.anthropic_api_key = secrets["anthropic_api_key"]
+    # .env keys override secrets if explicitly set in dev
+    env_openai = os.environ.get("OPENAI_API_KEY")
+    if env_openai:
+        s.openai_api_key = env_openai or None
+    env_anthropic = os.environ.get("ANTHROPIC_API_KEY")
+    if env_anthropic:
+        s.anthropic_api_key = env_anthropic or None
+    return s
+
+
+def _sync_settings_in_place(target: Settings, fresh: Settings) -> None:
+    """Update the shared Settings instance so all `from app.config import settings` bindings stay current."""
+    for field_name in Settings.model_fields:
+        setattr(target, field_name, getattr(fresh, field_name))
+
+
+def reload_settings() -> Settings:
+    global settings
+    fresh = _build_settings()
+    # #region agent log
+    try:
+        import json
+        import time
+
+        from app.services import model_router as _mr
+
+        with open(
+            "/Users/saurabhc/Desktop/ai-apps/picard-oss/.cursor/debug-c61648.log",
+            "a",
+            encoding="utf-8",
+        ) as _f:
+            _f.write(
+                json.dumps(
+                    {
+                        "sessionId": "c61648",
+                        "hypothesisId": "H-stale-settings",
+                        "location": "config.py:reload_settings",
+                        "message": "reload_settings in-place sync",
+                        "data": {
+                            "config_id": id(settings),
+                            "model_router_id": id(_mr.settings),
+                            "same_object_before": id(settings) == id(_mr.settings),
+                            "fresh_has_openai": bool(fresh.openai_api_key),
+                            "target_has_openai_before": bool(settings.openai_api_key),
+                        },
+                        "timestamp": int(time.time() * 1000),
+                        "runId": "post-fix",
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+    _sync_settings_in_place(settings, fresh)
+    # #region agent log
+    try:
+        import json
+        import time
+
+        from app.services import model_router as _mr
+
+        with open(
+            "/Users/saurabhc/Desktop/ai-apps/picard-oss/.cursor/debug-c61648.log",
+            "a",
+            encoding="utf-8",
+        ) as _f:
+            _f.write(
+                json.dumps(
+                    {
+                        "sessionId": "c61648",
+                        "hypothesisId": "H-stale-settings",
+                        "location": "config.py:reload_settings:after",
+                        "message": "reload_settings after sync",
+                        "data": {
+                            "same_object_after": id(settings) == id(_mr.settings),
+                            "target_has_openai_after": bool(settings.openai_api_key),
+                            "llm_available": bool(
+                                settings.openai_api_key
+                                if settings.llm_provider == "openai"
+                                else True
+                            ),
+                        },
+                        "timestamp": int(time.time() * 1000),
+                        "runId": "post-fix",
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+    return settings
+
+
+settings = _build_settings()

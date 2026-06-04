@@ -28,7 +28,8 @@ function highlightsForPage(
     return active ? [active] : [];
   }
 
-  return dedupeByBboxOverlap(onPage);
+  const dedupe = dedupeByBboxOverlap as (items: ChatReference[]) => ChatReference[];
+  return dedupe(onPage);
 }
 
 export function MultiHighlightPDFViewer({

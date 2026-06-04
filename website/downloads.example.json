@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "released_at": "2026-01-01T00:00:00Z",
+  "notes_url": "https://github.com/iamsaurabhc/picard-oss/releases/latest",
+  "primary": {
+    "darwin-aarch64": { "label": "macOS (Apple Silicon)", "url": "" },
+    "darwin-x86_64": { "label": "macOS (Intel)", "url": "" },
+    "windows-x86_64": { "label": "Windows", "url": "" },
+    "linux-x86_64": { "label": "Linux (deb)", "url": "" }
+  },
+  "manifest_url": "https://raw.githubusercontent.com/iamsaurabhc/picard-oss/gh-pages/releases/manifest.json"
+}

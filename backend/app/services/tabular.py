@@ -193,6 +193,138 @@ def delete_review(db: Session, review_id: str) -> None:
     db.commit()
 
 
+_PARTIES_COLUMN_HINTS = ("parties", "party", "counterpart")
+
+
+def get_tabular_review_document_ids(db: Session, review_id: str) -> list[str]:
+    review = db.get(TabularReview, review_id)
+    if not review:
+        return []
+    return _parse_doc_ids(review.document_ids_json)
+
+
+def count_tabular_review_documents(db: Session, review_id: str) -> int:
+    return len(get_tabular_review_document_ids(db, review_id))
+
+
+def _parties_column_keys(columns: list[TabularColumn]) -> list[str]:
+    keys: list[str] = []
+    for col in columns:
+        key_cf = col.key.casefold()
+        label_cf = col.label.casefold()
+        if any(h in key_cf or h in label_cf for h in _PARTIES_COLUMN_HINTS):
+            keys.append(col.key)
+    return keys
+
+
+def discover_tabular_listing_documents(
+    db: Session,
+    review_id: str,
+    *,
+    match_tokens: list[str],
+) -> list[tuple[str, int]]:
+    """Documents in a tabular review, scored by party-column match to target tokens."""
+    review = db.get(TabularReview, review_id)
+    if not review:
+        return []
+
+    document_ids = _parse_doc_ids(review.document_ids_json)
+    if not document_ids:
+        return []
+
+    columns = _parse_columns(review.columns_config_json)
+    party_keys = _parties_column_keys(columns)
+    col_labels = {c.key: c.label for c in columns}
+
+    cells = db.scalars(
+        select(TabularCell).where(
+            TabularCell.review_id == review_id,
+            TabularCell.status == "done",
+        )
+    ).all()
+
+    by_doc: dict[str, list[str]] = {doc_id: [] for doc_id in document_ids}
+    for cell in cells:
+        if cell.column_key in party_keys or not party_keys:
+            text = (cell.summary or "").strip()
+            if text:
+                by_doc.setdefault(cell.document_id, []).append(text)
+        elif party_keys:
+            label = col_labels.get(cell.column_key, "").casefold()
+            if any(h in label for h in _PARTIES_COLUMN_HINTS):
+                text = (cell.summary or "").strip()
+                if text:
+                    by_doc.setdefault(cell.document_id, []).append(text)
+
+    scored: list[tuple[str, int]] = []
+    matched_any = False
+    for doc_id in document_ids:
+        texts = by_doc.get(doc_id, [])
+        combined = " ".join(texts)
+        if match_tokens and _tabular_text_matches(combined, match_tokens):
+            scored.append((doc_id, 10 + len(texts)))
+            matched_any = True
+        elif not match_tokens:
+            scored.append((doc_id, 1))
+
+    if match_tokens and not matched_any:
+        for cell in cells:
+            text = (cell.summary or "").strip()
+            if text and _tabular_text_matches(text, match_tokens):
+                by_doc.setdefault(cell.document_id, []).append(text)
+        for doc_id in document_ids:
+            texts = by_doc.get(doc_id, [])
+            if texts:
+                scored.append((doc_id, 5 + len(texts)))
+        matched_any = bool(scored)
+
+    if not scored:
+        scored = [(doc_id, 1) for doc_id in document_ids]
+
+    return sorted(scored, key=lambda x: -x[1])
+
+
+def _tabular_text_matches(text: str, tokens: list[str]) -> bool:
+    if not text:
+        return False
+    cf = text.casefold()
+    return any(tok in cf for tok in tokens)
+
+
+def build_tabular_document_metadata_block(
+    db: Session,
+    review_id: str,
+    document_id: str,
+) -> str:
+    """Per-document metadata from completed tabular cells for map-phase context."""
+    review = db.get(TabularReview, review_id)
+    if not review:
+        return ""
+
+    columns = _parse_columns(review.columns_config_json)
+    col_labels = {c.key: c.label for c in columns}
+    cells = db.scalars(
+        select(TabularCell).where(
+            TabularCell.review_id == review_id,
+            TabularCell.document_id == document_id,
+            TabularCell.status == "done",
+        )
+    ).all()
+    if not cells:
+        return ""
+
+    lines = ["Tabular review metadata (structure only; cite facts from Sources with [N]):"]
+    for cell in cells:
+        label = col_labels.get(cell.column_key, cell.column_key)
+        summary = (cell.summary or "").strip()
+        if not summary:
+            continue
+        if len(summary) > 500:
+            summary = summary[:500] + "…"
+        lines.append(f"- **{label}:** {summary}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def build_tabular_chat_context(db: Session, review_id: str, max_chars: int = 8000) -> str:
     review = db.get(TabularReview, review_id)
     if not review:

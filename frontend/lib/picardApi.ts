@@ -64,11 +64,90 @@ export type ChunkRecord = {
   token_count: number | null;
 };
 
+export type AppSettings = {
+  llm_provider: string;
+  llm_model: string;
+  ollama_base_url: string;
+  enable_tiered_models: boolean;
+  slm_model: string | null;
+  enable_llm_query_understanding: boolean;
+  enable_query_expansion: boolean;
+  enable_context_ranker: boolean;
+  enable_excerpt_selector: boolean;
+  enable_carp: boolean;
+  enable_ner_entity_extract: boolean;
+  enable_slm_entity_extract: boolean;
+  liteparse_ocr_server_url: string | null;
+  picard_data_dir: string;
+  onboarding_complete: boolean;
+  show_prompts_in_chat: boolean;
+  update_channel: string;
+  release_manifest_url: string;
+  llm_configured: boolean;
+  openai_api_key_set: boolean;
+  anthropic_api_key_set: boolean;
+  version: string;
+};
+
+export type AppSettingsUpdate = {
+  llm_provider?: string;
+  llm_model?: string;
+  ollama_base_url?: string;
+  enable_tiered_models?: boolean;
+  slm_model?: string | null;
+  enable_llm_query_understanding?: boolean;
+  enable_query_expansion?: boolean;
+  enable_context_ranker?: boolean;
+  enable_excerpt_selector?: boolean;
+  enable_carp?: boolean;
+  enable_ner_entity_extract?: boolean;
+  enable_slm_entity_extract?: boolean;
+  liteparse_ocr_server_url?: string | null;
+  onboarding_complete?: boolean;
+  show_prompts_in_chat?: boolean;
+  update_channel?: string;
+};
+
+export type AppComponent = {
+  id: string;
+  name: string;
+  description: string;
+  installed: boolean;
+  running: boolean;
+  optional: boolean;
+  install_hint?: string;
+  ml_deps_installed?: boolean;
+};
+
+export type UpdateCheck = {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  download_url: string | null;
+  notes_url: string | null;
+  channel: string;
+};
+
+export type PromptSummary = {
+  key: string;
+  is_overridden: boolean;
+  preview: string;
+  length: number;
+};
+
+export type PromptDetail = {
+  key: string;
+  text: string;
+  is_overridden: boolean;
+  default_preview: string;
+};
+
 export type OcrHealth = {
   configured: boolean;
   server_url: string | null;
   reachable: boolean;
   engine: string;
+  tesseract_ready?: boolean;
 };
 
 export type SearchHit = {
@@ -437,6 +516,49 @@ export const picardApi = {
   regenerateTabularCell: (cellId: string) =>
     request<TabularCell>(`/tabular/cells/${cellId}/regenerate`, { method: "POST" }),
   tabularExportUrl: (reviewId: string) => `${API_URL}/tabular/reviews/${reviewId}/export.xlsx`,
+
+  getSettings: () => request<AppSettings>("/settings"),
+  updateSettings: (body: Partial<AppSettingsUpdate>) =>
+    request<AppSettings>("/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateSecrets: (body: { openai_api_key?: string; anthropic_api_key?: string }) =>
+    request<{ ok: boolean; openai_api_key_set: boolean; anthropic_api_key_set: boolean }>(
+      "/settings/secrets",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    ),
+  resetSettings: (keepSecrets = true) =>
+    request<AppSettings>("/settings/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keep_secrets: keepSecrets }),
+    }),
+  getOnboardingStatus: () =>
+    request<{ needs_onboarding: boolean; llm_configured: boolean }>("/settings/onboarding-status"),
+  getComponents: () =>
+    request<{ components: AppComponent[] }>("/settings/components"),
+  installComponent: (id: string) =>
+    request<{ ok: boolean; message: string }>(`/settings/components/${id}/install`, {
+      method: "POST",
+    }),
+  checkForUpdates: () => request<UpdateCheck>("/updates/check"),
+  getVersion: () => request<{ version: string; channel?: string; build_sha?: string | null }>("/version"),
+  listPrompts: () => request<{ prompts: PromptSummary[] }>("/prompts"),
+  getPrompt: (key: string) => request<PromptDetail>(`/prompts/${key}`),
+  updatePrompt: (key: string, text: string) =>
+    request<PromptDetail>(`/prompts/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }),
+  resetPrompt: (key: string) =>
+    request<PromptDetail>(`/prompts/${key}`, { method: "DELETE" }),
   streamTabularGeneration: async function* (
     reviewId: string,
     body?: { document_ids?: string[]; column_keys?: string[]; only_pending?: boolean }

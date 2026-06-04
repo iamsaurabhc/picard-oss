@@ -6,7 +6,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import Chunk, Document, Job
@@ -22,6 +22,30 @@ _executor = ThreadPoolExecutor(max_workers=1)
 _parse_lock = threading.Lock()
 
 RETRYABLE_STATUSES = frozenset({"pending", "parsing", "error"})
+
+
+def _ingestion_log(msg: str) -> None:
+    try:
+        from app.paths import resolve_picard_data_dir
+
+        log_path = resolve_picard_data_dir() / "desktop-backend.log"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[ingestion] {msg}\n")
+    except Exception:
+        logger.debug("ingestion log write failed", exc_info=True)
+
+
+def _fail_stale_parse_jobs(db: Session) -> None:
+    """Mark orphaned running parse jobs so the UI does not imply active work."""
+    db.execute(
+        update(Job)
+        .where(Job.job_type == "parse", Job.status == "running")
+        .values(
+            status="error",
+            error="Interrupted (backend restarted or worker crashed)",
+            updated_at=utc_now_iso(),
+        )
+    )
 
 
 def _update_job(db: Session, job_id: str, **kwargs) -> None:
@@ -42,6 +66,7 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
             _update_job(db, job_id, status="error", error="Document not found")
             return
 
+        _ingestion_log(f"parse start document_id={document_id} job_id={job_id}")
         doc.parse_status = "parsing"
         _update_job(db, job_id, status="running", progress=0.1)
         db.commit()
@@ -89,6 +114,7 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
             result_json=json.dumps({"chunk_count": len(chunks), **parse_meta}),
         )
         db.commit()
+        _ingestion_log(f"parse done document_id={document_id} chunks={len(chunks)} pages={page_count}")
 
         extract_entities_for_document(db, document_id)
         from app.services.metadata_extractor import extract_metadata_for_document
@@ -109,6 +135,7 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
                 logger.warning("chunk embedding index failed: %s", emb_exc)
     except Exception as exc:
         db.rollback()
+        _ingestion_log(f"parse error document_id={document_id}: {exc}")
         doc = db.get(Document, document_id)
         if doc:
             doc.parse_status = "error"
@@ -187,16 +214,20 @@ def retry_stuck_documents(workspace_id: str) -> list[str]:
 
 def recover_stuck_parsing_documents() -> int:
     """Re-queue documents left in 'parsing' after a crash or kill."""
+    recovered: list[str] = []
     db = SessionLocal()
     try:
         docs = db.scalars(select(Document).where(Document.parse_status == "parsing")).all()
-        recovered: list[str] = []
         for doc in docs:
             _prepare_document_for_retry(db, doc)
             recovered.append(doc.id)
+        if recovered:
+            _fail_stale_parse_jobs(db)
         db.commit()
     finally:
         db.close()
+    if recovered:
+        _ingestion_log(f"recover_stuck re-queued {len(recovered)} documents")
     for document_id in recovered:
         enqueue_parse_document(document_id)
     return len(recovered)

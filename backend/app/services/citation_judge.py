@@ -7,6 +7,7 @@ import re
 from app.config import settings
 from app.services.citations import CitationMap, MARKER_RE
 from app.services.model_router import ModelRole, completion
+from app.services.prompt_registry import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def judge_citations(
         messages=[
             {
                 "role": "user",
-                "content": JUDGE_PROMPT.format(
+                "content": get_prompt("citation_judge").format(
                     answer=answer,
                     sources="\n".join(source_lines),
                 ),

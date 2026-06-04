@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from sqlalchemy import text
@@ -58,8 +59,20 @@ def run_migrations(engine: Engine) -> None:
             """))
 
 
+def _init_sql_path() -> Path:
+    rel = Path(__file__).parent / "init.sql"
+    if rel.is_file():
+        return rel
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "app" / "db" / "init.sql"
+        if bundled.is_file():
+            return bundled
+    raise FileNotFoundError(f"init.sql not found (tried {rel})")
+
+
 def run_init_sql(engine: Engine) -> None:
-    init_path = Path(__file__).parent / "init.sql"
+    init_path = _init_sql_path()
     sql = init_path.read_text(encoding="utf-8")
     raw = engine.raw_connection()
     try:

@@ -17,6 +17,7 @@ from app.services.entity_index import (
     resolve_party_canonicals,
 )
 from app.services.model_router import ModelRole, completion
+from app.services.prompt_registry import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,13 @@ _QUESTION_FRAMING_WORDS = frozenset(
     }
 )
 
+_CASE_QUERY_FRAMING = frozenset(
+    {
+        "list", "all", "case", "details", "detail", "on", "the", "involving", "about",
+        "show", "give", "tell",
+    }
+)
+
 
 def _is_valid_amount_canonical(canonical: str) -> bool:
     return bool(_AMOUNT_CANONICAL_RE.match(canonical))
@@ -237,6 +245,8 @@ def _is_entity_matter_listing_query(query: str) -> bool:
     if re.search(r"\blist\b", q) and re.search(r"\b(?:cases|matters)\b", q) and re.search(
         r"\b(?:against|involving)\b", q
     ):
+        return True
+    if re.search(r"\blist\s+all\s+.*\bcase\s+details?\s+against\b", q):
         return True
     return False
 
@@ -350,6 +360,8 @@ def _is_case_overview_query(query: str) -> bool:
     if re.search(r"\blist\b.*\b(case|details)\b", q):
         return True
     if re.search(r"\bcase\s+details\b", q) and re.search(r"\b(list|all|overview|summar)", q):
+        if re.search(r"\bagainst\b", q) and not re.search(r"\s+v\.?\s+", query, re.IGNORECASE):
+            return False
         return True
     if re.search(r"\bcase\s+details\b", q) and re.search(r"\binvolving\b", q):
         return True
@@ -467,6 +479,25 @@ def _fallback_search_passes(
     return []
 
 
+def _should_use_case_overview_not_listing(query: str, case_terms: list[str] | None) -> bool:
+    """'List case details on Winzo v Google' is one matter, not a catalog against Google."""
+    if not case_terms:
+        return False
+    q = query.casefold()
+    if not re.search(r"\b(?:case\s+details?|matter\s+details?)\b", q):
+        return False
+    if re.search(r"\b(?:cases|matters|proceedings|complaints)\s+(?:against|involving|re)\b", q):
+        return False
+    # "case details against Google" = catalog of matters vs Google, not one "X v Y" case.
+    if re.search(r"\bcase\s+details?\s+against\b", q):
+        return False
+    if re.search(r"\b(?:against|involving|re)\s+", q) and not re.search(
+        r"\s+v\.?\s+", query, re.IGNORECASE
+    ):
+        return False
+    return bool(re.search(r"\s+v\.?\s+", query, re.IGNORECASE))
+
+
 def _validate_retrieval_plan(
     understanding: QueryUnderstanding,
     query: str,
@@ -476,6 +507,14 @@ def _validate_retrieval_plan(
     """Schema validation and safety — no regex intent overrides or pass merging."""
     merges: list[str] = list(understanding.rule_merges)
     case_terms = _case_name_terms(query) or understanding.fts.must_terms[:2]
+
+    if (
+        understanding.intent == "entity_matter_listing"
+        and _should_use_case_overview_not_listing(query, case_terms)
+    ):
+        understanding.intent = "case_overview"
+        understanding.target_entity = None
+        merges.append("intent:listing_to_overview:case_v_pattern")
 
     valid_constraints: list[QueryConstraint] = []
     amount_fts_boost: list[str] = []
@@ -868,7 +907,7 @@ def _llm_understand(query: str, document_context: DocumentContext | None = None)
     raw = completion(
         messages=[{
             "role": "user",
-            "content": QUERY_PLANNER_PROMPT.format(
+            "content": get_prompt("query_understanding").format(
                 document_context=ctx_block,
                 query=query,
             ),
@@ -924,13 +963,24 @@ def _llm_understand(query: str, document_context: DocumentContext | None = None)
 
 def _case_name_terms(query: str) -> list[str] | None:
     """Extract party tokens from 'Party A v Party B' style references."""
+    parts = re.split(r"\s+v\.?\s+", query, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        left = _extract_tokens(parts[0])
+        right = _extract_tokens(parts[1])
+        if left and right:
+            # Prefer distinctive tokens (e.g. winzo, games) over framing words (list, case).
+            left_keep = [
+                t
+                for t in left
+                if t not in _QUESTION_FRAMING_WORDS and t not in _CASE_QUERY_FRAMING
+            ]
+            right_keep = [
+                t for t in right if t not in _QUESTION_FRAMING_WORDS and t not in _CASE_QUERY_FRAMING
+            ]
+            party_a = (left_keep or left)[0]
+            party_b = (right_keep or right)[0]
+            return _dedupe_terms([party_a, party_b])
     if not settings.enable_regex_nlp:
-        parts = re.split(r"\s+v\.?\s+", query, maxsplit=1, flags=re.IGNORECASE)
-        if len(parts) == 2:
-            left = _extract_tokens(parts[0])
-            right = _extract_tokens(parts[1])
-            if left and right:
-                return _dedupe_terms([left[-1], right[0]])
         return None
     match = re.search(
         r"\b([A-Z][a-z]+)\s+v\.?\s+(.+?)(?:\?|$|\s+(?:negligence|damages|facts|details))",

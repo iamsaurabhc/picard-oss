@@ -58,6 +58,28 @@ def chunks_from_entity_mentions(
     return hits
 
 
+def chunks_from_entity_mentions_per_doc(
+    db: Session,
+    workspace_id: str,
+    document_ids: list[str],
+    *,
+    entity_types: tuple[str, ...] = ("party", "amount", "identifier", "date"),
+    per_doc_limit: int = 4,
+) -> list[SearchHit]:
+    """Fair per-document entity chunk quota (avoids one doc consuming global limit)."""
+    merged: list[SearchHit] = []
+    for doc_id in document_ids:
+        doc_hits = chunks_from_entity_mentions(
+            db,
+            workspace_id,
+            [doc_id],
+            entity_types=entity_types,
+            limit=per_doc_limit,
+        )
+        merged = merge_search_hits(merged, doc_hits)
+    return merged
+
+
 def merge_search_hits(existing: list[SearchHit], extra: list[SearchHit]) -> list[SearchHit]:
     by_id = {h.chunk_id: h for h in existing}
     for h in extra:

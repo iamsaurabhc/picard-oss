@@ -72,8 +72,9 @@ export function OcrServerBanner({
   if (!configured) {
     return (
       <p className="mb-4 rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-        OCR fallback: bundled Tesseract. Set <code className="text-neutral-800">LITEPARSE_OCR_SERVER_URL</code> and run{" "}
-        <code className="text-neutral-800">./scripts/start-paddleocr.sh</code> for PaddleOCR on scanned PDFs.
+        Scanned PDFs use bundled Tesseract OCR
+        {reachable ? " (ready)" : " (installing language data on first run…)"}. For higher accuracy, add a PaddleOCR
+        server URL in Settings and run <code className="text-neutral-800">./scripts/start-paddleocr.sh</code>.
       </p>
     );
   }

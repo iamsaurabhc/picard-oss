@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/PageHeader";
@@ -38,6 +39,9 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["documents", workspaceId] }),
   });
 
+  const inProgress = documents.filter(
+    (d) => d.parse_status === "pending" || d.parse_status === "parsing"
+  );
   const stuckCount = documents.filter(
     (d) => d.parse_status === "pending" || d.parse_status === "parsing" || d.parse_status === "error"
   ).length;
@@ -62,6 +66,25 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
             : "Upload PDFs for parsing and indexing."
         }
       />
+
+      {inProgress.length > 0 ? (
+        <div
+          className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          <div>
+            <p className="font-medium">
+              Processing {inProgress.length} document{inProgress.length === 1 ? "" : "s"}
+            </p>
+            <p className="mt-0.5 text-blue-800/90">
+              PDFs are parsed one at a time. Large files or OCR layouts can take several minutes each.
+              This page refreshes automatically.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {ocrHealth ? (
         <OcrServerBanner

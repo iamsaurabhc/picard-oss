@@ -11,6 +11,7 @@ from app.config import settings
 from app.db.models import Entity, EntityMention
 from app.schemas import SearchHit
 from app.services.model_router import ModelRole, completion
+from app.services.prompt_registry import get_prompt
 from app.services.query_understanding import SubQuestion
 
 logger = logging.getLogger(__name__)
@@ -539,7 +540,7 @@ def select_excerpts(
     raw = completion(
         messages=[{
             "role": "user",
-            "content": EXCERPT_SELECTOR_PROMPT.format(
+            "content": get_prompt("excerpt_selector").format(
                 max_chars=max_chars,
                 intent=intent,
                 coverage_goal=coverage_goal or "(answer the main question)",
