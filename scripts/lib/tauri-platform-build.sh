@@ -9,6 +9,11 @@ set -euo pipefail
 cd "$ROOT"
 
 export PATH="${HOME}/.cargo/bin:${PATH}"
+
+# setup-python on GHA can set PKG_CONFIG_PATH to its prefix and break Tauri GTK linking.
+if [ "$(uname -s)" = "Linux" ]; then
+  export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
 bash "$ROOT/scripts/ensure-sidecar-stubs.sh" "$TARGET" 2>/dev/null || true
 bash "$ROOT/scripts/ensure-rust-toolchain.sh"
 
@@ -53,8 +58,10 @@ export PATH="${HOME}/.cargo/bin:${PATH}"
 "${HOME}/.cargo/bin/cargo" build --release --bin picard-supervisor --target "$TARGET"
 PATH="${HOME}/.cargo/bin:${PATH}" npx tauri build --target "$TARGET" --bundles "$BUNDLES"
 
-APP="target/${TARGET}/release/bundle/macos/Picard.app"
-if [ -d "$APP" ]; then
-  echo "==> Ad-hoc codesign Picard.app (required for valid bundle after resource binaries)"
-  codesign --force --deep --sign - "$APP"
+if [[ "$TARGET" == *-apple-darwin ]]; then
+  APP="target/${TARGET}/release/bundle/macos/Picard.app"
+  if [ -d "$APP" ]; then
+    echo "==> Ad-hoc codesign Picard.app (required for valid bundle after resource binaries)"
+    codesign --force --deep --sign - "$APP"
+  fi
 fi

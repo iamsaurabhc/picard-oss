@@ -56,7 +56,8 @@ Requires **Rust stable >= 1.83** (`rustup update stable`). If `cargo --version` 
 ./scripts/build-exe-windows-x64.sh
 ./scripts/build-exe-windows-x86.sh
 ./scripts/build-deb-linux-amd64.sh
-./scripts/build-deb-linux-i386.sh
+
+Linux i386 (`.deb`) builds are not in CI yet (GTK cross-compile); use `build-deb-linux-i386.sh` locally if needed.
 ```
 
 Dev stubs (before sidecars are built):

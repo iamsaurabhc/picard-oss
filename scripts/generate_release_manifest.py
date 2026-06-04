@@ -21,7 +21,6 @@ PLATFORM_PATTERNS: dict[str, list[str]] = {
     "windows-x86_64": ["x86_64-pc-windows-msvc", "x64-setup", "x64.nsis"],
     "windows-i686": ["i686-pc-windows-msvc", "i686-setup", "x86-setup"],
     "linux-x86_64": ["x86_64-unknown-linux-gnu", "amd64.deb"],
-    "linux-i686": ["i686-unknown-linux-gnu", "i386.deb", "i686.deb"],
 }
 
 

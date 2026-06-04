@@ -3,6 +3,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Git Bash on Windows can expose GITHUB_WORKSPACE with backslashes; normalize for subprocesses.
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT="$(cygpath -u "$ROOT")"
+fi
 ICONS="$ROOT/desktop/src-tauri/icons"
 SOURCE="$ICONS/picard_logo_light_dark_bg.png"
 SVG_SOURCE="$ICONS/picard.svg"
@@ -24,18 +28,25 @@ fi
 npx tauri icon "src-tauri/icons/picard_logo_light_dark_bg.png"
 
 echo "==> Next.js app icons"
-python3 <<PY
+export PICARD_ROOT="$ROOT"
+export PICARD_SOURCE="$SOURCE"
+export PICARD_SVG="$SVG_SOURCE"
+python3 <<'PY'
+import os
 from pathlib import Path
+
 try:
     from PIL import Image
 except ImportError:
-    import subprocess, sys
+    import subprocess
+    import sys
+
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pillow"])
     from PIL import Image
 
-src = Path("$SOURCE")
-app = Path("$ROOT/frontend/app")
-public = Path("$ROOT/frontend/public")
+src = Path(os.environ["PICARD_SOURCE"])
+app = Path(os.environ["PICARD_ROOT"]) / "frontend" / "app"
+public = Path(os.environ["PICARD_ROOT"]) / "frontend" / "public"
 app.mkdir(parents=True, exist_ok=True)
 public.mkdir(parents=True, exist_ok=True)
 
@@ -51,7 +62,7 @@ for size, name in [(32, "icon.png"), (180, "apple-icon.png")]:
     canvas.save(out)
     print("Wrote", out)
 
-svg = Path("$SVG_SOURCE")
+svg = Path(os.environ["PICARD_SVG"])
 if svg.is_file():
     (public / "picard.svg").write_bytes(svg.read_bytes())
     print("Wrote", public / "picard.svg")

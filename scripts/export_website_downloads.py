@@ -17,7 +17,6 @@ LABELS = {
     "windows-x86_64": "Windows (64-bit)",
     "windows-i686": "Windows (32-bit)",
     "linux-x86_64": "Linux (deb, amd64)",
-    "linux-i686": "Linux (deb, i386)",
 }
 
 

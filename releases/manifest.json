@@ -8,8 +8,7 @@
     "darwin-x86_64": { "url": "", "sha256": "" },
     "windows-x86_64": { "url": "", "sha256": "" },
     "windows-i686": { "url": "", "sha256": "" },
-    "linux-x86_64": { "url": "", "sha256": "" },
-    "linux-i686": { "url": "", "sha256": "" }
+    "linux-x86_64": { "url": "", "sha256": "" }
   },
   "docker": {
     "backend": "ghcr.io/iamsaurabhc/picard-oss-backend:0.2.0",
