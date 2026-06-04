@@ -3,22 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Git Bash on Windows exposes GITHUB_WORKSPACE as D:\a\...; backslashes break PyInstaller (\a, \t, …).
 if command -v cygpath >/dev/null 2>&1; then
   ROOT="$(cygpath -u "$ROOT")"
 else
   ROOT="${ROOT//\\//}"
 fi
-
-posix_path() {
-  local p="$1"
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -u "$p"
-  else
-    echo "${p//\\//}"
-  fi
-}
-
 RES_BACKEND="$ROOT/desktop/src-tauri/resources/backend"
 
 cd "$ROOT/backend"
@@ -27,75 +16,70 @@ if [ ! -d "$PYI_VENV" ]; then
   python3 -m venv "$PYI_VENV"
 fi
 
+# Platform-specific venv layout only; data paths stay relative to backend/ (no D:\a bash escapes).
 if [ -f "$PYI_VENV/Scripts/python.exe" ]; then
   PYI_PYTHON="$PYI_VENV/Scripts/python.exe"
-  PYI_SITE="$PYI_VENV/Lib/site-packages"
   DATA_SEP=";"
-elif [ -f "$PYI_VENV/bin/python" ]; then
-  PYI_PYTHON="$PYI_VENV/bin/python"
-  PY_VER="$("$PYI_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-  PYI_SITE="$PYI_VENV/lib/python${PY_VER}/site-packages"
-  DATA_SEP=":"
 else
-  echo "PyInstaller venv python not found under $PYI_VENV" >&2
-  exit 1
+  PYI_PYTHON="$PYI_VENV/bin/python"
+  DATA_SEP=":"
 fi
 
-if [ ! -d "$PYI_SITE" ]; then
-  echo "PyInstaller venv site-packages not found: $PYI_SITE" >&2
+if [ ! -f "$PYI_PYTHON" ]; then
+  echo "PyInstaller venv python not found under $PYI_VENV" >&2
   exit 1
 fi
 
 "$PYI_PYTHON" -m pip install -q -r requirements-core.txt pyinstaller
 
 add_data() {
-  PYI_ARGS+=(--add-data "$(posix_path "$1")${DATA_SEP}$2")
+  PYI_ARGS+=(--add-data "$1${DATA_SEP}$2")
 }
 
 add_binary() {
-  PYI_ARGS+=(--add-binary "$(posix_path "$1")${DATA_SEP}$2")
+  PYI_ARGS+=(--add-binary "$1${DATA_SEP}$2")
 }
 
-PYI_ARGS=(
-  --onedir --clean --name picard-backend
-)
+PYI_ARGS=(--onedir --clean --name picard-backend)
 add_data "app/db/init.sql" "app/db"
 add_data "app/defaults/settings.json" "app/defaults"
 
-# Tesseract traineddata for liteparse OCR (bundled; ~4 MB eng fast model).
-TESS_VENDOR="$ROOT/backend/vendor/tessdata"
-mkdir -p "$TESS_VENDOR"
-if [ ! -f "$TESS_VENDOR/eng.traineddata" ]; then
+mkdir -p vendor/tessdata
+if [ ! -f vendor/tessdata/eng.traineddata ]; then
   echo "Downloading eng.traineddata for Tesseract…"
-  curl -fsSL -o "$TESS_VENDOR/eng.traineddata" \
+  curl -fsSL -o vendor/tessdata/eng.traineddata \
     "https://github.com/tesseract-ocr/tessdata_fast/raw/refs/heads/main/eng.traineddata"
 fi
-add_data "$TESS_VENDOR" "tessdata"
+add_data "vendor/tessdata" "tessdata"
 
-# liteparse needs the pdfium shared library beside its extension (not auto-collected by PyInstaller).
 PYI_ARGS+=(--collect-all=litellm)
 PYI_ARGS+=(--hidden-import=tiktoken_ext.openai_public)
 
-# tiktoken encodings (cl100k_base) for litellm token counting in frozen builds.
-TIKTOKEN_CACHE="$ROOT/backend/vendor/tiktoken_cache"
-mkdir -p "$TIKTOKEN_CACHE"
+mkdir -p vendor/tiktoken_cache
 CL100K_URL="https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
 CL100K_CACHE_KEY="$("$PYI_PYTHON" -c 'import hashlib; print(hashlib.sha1("'"${CL100K_URL}"'".encode()).hexdigest())')"
-if [ ! -f "$TIKTOKEN_CACHE/$CL100K_CACHE_KEY" ]; then
+if [ ! -f "vendor/tiktoken_cache/$CL100K_CACHE_KEY" ]; then
   echo "Downloading cl100k_base.tiktoken for tiktoken…"
-  curl -fsSL -o "$TIKTOKEN_CACHE/$CL100K_CACHE_KEY" "$CL100K_URL"
+  curl -fsSL -o "vendor/tiktoken_cache/$CL100K_CACHE_KEY" "$CL100K_URL"
 fi
-add_data "$TIKTOKEN_CACHE" "tiktoken_cache"
+add_data "vendor/tiktoken_cache" "tiktoken_cache"
 
-PYI_SITE="$(posix_path "$PYI_SITE")"
-if [ -f "$PYI_SITE/liteparse/libpdfium.dylib" ]; then
-  add_binary "$PYI_SITE/liteparse/libpdfium.dylib" "liteparse"
-elif [ -f "$PYI_SITE/liteparse/pdfium.dll" ]; then
-  add_binary "$PYI_SITE/liteparse/pdfium.dll" "liteparse"
-elif [ -f "$PYI_SITE/liteparse/libpdfium.so" ]; then
-  add_binary "$PYI_SITE/liteparse/libpdfium.so" "liteparse"
+# Resolve pdfium via Python (forward-slash path; safe on Windows Git Bash).
+PDFIUM_PATH="$("$PYI_PYTHON" -c "
+import pathlib
+import liteparse
+root = pathlib.Path(liteparse.__file__).resolve().parent
+for name in ('pdfium.dll', 'libpdfium.dylib', 'libpdfium.so'):
+    p = root / name
+    if p.is_file():
+        print(p.as_posix())
+        break
+")"
+if [ -n "$PDFIUM_PATH" ]; then
+  add_binary "$PDFIUM_PATH" "liteparse"
 fi
 
+rm -f picard-backend.spec
 "$PYI_PYTHON" -m PyInstaller "${PYI_ARGS[@]}" \
   --hidden-import=uvicorn.logging \
   --hidden-import=uvicorn.loops \
@@ -112,7 +96,6 @@ fi
 
 rm -rf "$RES_BACKEND"
 mkdir -p "$RES_BACKEND"
-# dist/picard-backend/ contains the executable + support files
 if command -v rsync >/dev/null 2>&1; then
   rsync -a dist/picard-backend/ "$RES_BACKEND/"
 else
