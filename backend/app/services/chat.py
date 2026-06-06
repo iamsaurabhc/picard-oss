@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from collections.abc import AsyncIterator, Iterator
 
@@ -13,17 +12,14 @@ from app.db.models import ChatMessage, ChatSession, Document
 from app.db.session import utc_now_iso
 from app.schemas import ChatSessionOut, ChatSessionSummary, ChatSessionUpdate, ChatStreamRequest, SearchHit, SearchRequest
 from app.services.case_scoping import resolve_case_document_ids
-from app.services.citation_judge import judge_citations
-from app.services.citations import (
-    build_citation_map,
-    build_system_prompt,
-    refuse_gate,
-    references_for_api,
-    validate_response,
+from app.services.citation_kernel import (
+    REFUSAL_MESSAGE,
+    apply_prompt_overlays,
+    build_evidence_prompt_and_map,
+    rank_and_cover_hits,
+    stream_corpus_evidence_step,
 )
-from app.services.context_coverage import apply_context_coverage
-from app.services.context_ranker import rank_context
-from app.services.model_router import ModelRole, stream_completion
+from app.services.citations import refuse_gate
 from app.services.entity_listing_retrieval import entity_listing_retrieve_with_progress
 from app.services.listing_map_reduce import (
     run_listing_map_reduce_with_progress,
@@ -33,7 +29,7 @@ from app.services.excerpt_selector import has_amount_signal
 from app.services.overview_retrieval import overview_retrieve_with_progress
 from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retrieve_with_progress
 from app.services.query_understanding import understand_query, understanding_summary, _case_name_terms
-from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
+from app.services.retrieval_progress import RetrievalProgressEmitter
 from app.services.search import execute_search
 
 _GENERIC_SESSION_TITLES = frozenset({"New chat", "Assistant"})
@@ -258,11 +254,6 @@ def _workspace_doc_names(
     return {d.id: d.file_name for d in rows}
 
 
-def _drain_retrieval_generator(gen: Iterator[dict]) -> tuple[list[dict], tuple[list[SearchHit], dict]]:
-    events, result = consume_retrieval_generator(gen)
-    return events, result
-
-
 def _emit_carp_snippets(
     emitter: RetrievalProgressEmitter,
     hits: list[SearchHit],
@@ -332,6 +323,30 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     is_overview = understanding.intent == "case_overview"
     is_listing = understanding.intent == "entity_matter_listing"
 
+    agent_policy = None
+    if body.mode == "agent":
+        from app.services.agent_retrieval_policy import (
+            apply_policy_to_understanding,
+            build_agent_retrieval_policy,
+            routing_flags_from_policy,
+        )
+
+        agent_policy = build_agent_retrieval_policy(
+            body.message,
+            agent_profile=settings.agent_profile,
+            document_ids=body.document_ids,
+            understanding=understanding,
+        )
+        understanding = apply_policy_to_understanding(
+            understanding,
+            agent_policy,
+            query=body.message,
+            db=db,
+            workspace_id=body.workspace_id,
+            document_ids=body.document_ids,
+        )
+        is_listing, is_overview = routing_flags_from_policy(agent_policy, understanding)
+
     yield emitter.progress(
         "understanding",
         "done",
@@ -339,9 +354,16 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         mode=understanding.retrieval_mode,
         pass_count=len(understanding.search_passes),
         used_llm=understanding.used_llm,
+        breadth=agent_policy.breadth if agent_policy else None,
     )
 
     retrieval_diagnostics: dict = {"understanding": understanding_summary(understanding)}
+    if agent_policy:
+        retrieval_diagnostics["agent_policy"] = {
+            "breadth": agent_policy.breadth,
+            "profile": agent_policy.agent_profile,
+            "documents_in_scope": agent_policy.documents_in_scope,
+        }
     search_mode = "SIMPLE"
     bundles = None
     suggestions: list[str] = []
@@ -405,6 +427,9 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             yield ev
         yield emitter.progress("search", "done", strategy="carp", hit_count=len(hits))
     elif is_listing:
+        listing_discovery_limit = (
+            agent_policy.discovery_limit if agent_policy else None
+        )
         gen = entity_listing_retrieve_with_progress(
             db,
             understanding,
@@ -413,16 +438,22 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             query=body.message,
             tabular_review_id=body.tabular_review_id,
             emitter=emitter,
+            discovery_doc_limit=listing_discovery_limit,
+            agent_deep=body.mode == "agent",
         )
-        progress_events, (hits, listing_diag) = _drain_retrieval_generator(gen)
-        for ev in progress_events:
-            yield ev
+        while True:
+            try:
+                yield next(gen)
+            except StopIteration as exc:
+                hits, listing_diag = exc.value
+                break
         retrieval_diagnostics.update(listing_diag)
         discovered = listing_diag.get("document_ids_discovered") or []
         if should_use_listing_map_reduce(
             discovered,
             tabular_review_id=body.tabular_review_id,
             db=db,
+            document_ids=body.document_ids,
         ):
             map_gen = run_listing_map_reduce_with_progress(
                 db,
@@ -434,10 +465,15 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
                 documents_total_discovered=listing_diag.get("documents_total_discovered"),
                 tabular_review_id=body.tabular_review_id,
                 emitter=emitter,
+                agent_deep=body.mode == "agent",
+                map_max_docs=agent_policy.map_max_docs if agent_policy else None,
             )
-            map_events, listing_map_result = consume_retrieval_generator(map_gen)
-            for ev in map_events:
-                yield ev
+            while True:
+                try:
+                    yield next(map_gen)
+                except StopIteration as exc:
+                    listing_map_result = exc.value
+                    break
             retrieval_diagnostics.update(listing_map_result.get("diagnostics") or {})
             hits = []
             refused = False
@@ -456,9 +492,12 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             query=body.message,
             emitter=emitter,
         )
-        progress_events, (hits, overview_diag) = _drain_retrieval_generator(gen)
-        for ev in progress_events:
-            yield ev
+        while True:
+            try:
+                yield next(gen)
+            except StopIteration as exc:
+                hits, overview_diag = exc.value
+                break
         retrieval_diagnostics.update(overview_diag)
         top_k = settings.chat_overview_top_k
         rank_mode = "coverage"
@@ -482,13 +521,21 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             config=config,
             emitter=emitter,
         )
-        progress_events, (hits, planned_diag) = _drain_retrieval_generator(gen)
-        for ev in progress_events:
-            yield ev
+        while True:
+            try:
+                yield next(gen)
+            except StopIteration as exc:
+                hits, planned_diag = exc.value
+                break
         retrieval_diagnostics.update(planned_diag)
         top_k = settings.chat_top_k
         rank_mode = "precision"
         refused = len(hits) == 0
+
+    overview_page_context = (
+        is_overview
+        and retrieval_diagnostics.get("strategy") == "overview_page_context"
+    )
 
     if not listing_map_result and (is_overview or is_listing):
         from app.services.entity_page_chunks import (
@@ -498,14 +545,22 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
 
         enrich_doc_ids: list[str]
         if is_overview:
-            enrich_doc_ids = list(scoped_document_ids or body.document_ids or [])
+            if overview_page_context:
+                enrich_doc_ids = list(
+                    retrieval_diagnostics.get("scoped_document_ids")
+                    or scoped_document_ids
+                    or body.document_ids
+                    or []
+                )
+            else:
+                enrich_doc_ids = list(scoped_document_ids or body.document_ids or [])
         else:
             discovered = retrieval_diagnostics.get("document_ids_discovered") or []
             enrich_doc_ids = list(discovered) or sorted({h.document_id for h in hits})
 
         if enrich_doc_ids:
             entity_types: tuple[str, ...] = (
-                ("amount", "party", "date")
+                ("amount", "party", "date", "identifier")
                 if is_overview
                 else ("party", "amount", "identifier", "date")
             )
@@ -514,48 +569,36 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
                 body.workspace_id,
                 enrich_doc_ids,
                 entity_types=entity_types,
-                limit=24 if is_listing else 16,
+                limit=24 if is_listing else 20,
             )
             hits = merge_search_hits(hits, entity_hits)
 
     if not listing_map_result:
         yield emitter.progress("rank", "start")
-        ranked_hits, rank_diagnostics = rank_context(
-            body.message,
-            understanding,
-            hits,
-            top_k=top_k,
-            rank_mode=rank_mode,  # type: ignore[arg-type]
-        )
-        retrieval_diagnostics.update(rank_diagnostics)
-
         yield emitter.progress("coverage", "start")
-        hits, coverage_diag = apply_context_coverage(
+        if overview_page_context:
+            from app.services.entity_page_chunks import dedupe_hits_by_page
+
+            hits = dedupe_hits_by_page(hits)
+        hits, rank_cover_diag = rank_and_cover_hits(
             db,
-            ranked_hits,
-            understanding,
             query=body.message,
+            understanding=understanding,
+            hits=hits,
             workspace_id=body.workspace_id,
             document_ids=scoped_document_ids or body.document_ids,
             bundles=bundles,
             top_k=top_k,
-            rank_diagnostics=rank_diagnostics,
+            rank_mode=rank_mode,  # type: ignore[arg-type]
+            page_level_pool=overview_page_context,
         )
-        retrieval_diagnostics.update(coverage_diag)
+        retrieval_diagnostics.update(rank_cover_diag)
         yield emitter.progress(
             "coverage",
             "done",
             chunk_count=len(hits),
-            gaps_filled=coverage_diag.get("coverage_report", {}).get("gaps_filled", []),
+            gaps_filled=rank_cover_diag.get("coverage_report", {}).get("gaps_filled", []),
         )
-        retrieval_diagnostics["pages_in_context"] = sorted({h.page_number for h in hits})
-        retrieval_diagnostics["documents_in_context"] = sorted({h.document_id for h in hits})
-        if is_listing:
-            discovered = retrieval_diagnostics.get("document_ids_discovered") or []
-            in_ctx = retrieval_diagnostics["documents_in_context"]
-            retrieval_diagnostics["documents_missing_from_context"] = [
-                d for d in discovered if d not in in_ctx
-            ]
         yield emitter.progress("rank", "done", ranked_count=len(hits))
     else:
         cmap = listing_map_result["citation_map"]
@@ -583,20 +626,16 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     yield retrieval_event
 
     if refuse_gate(hits) and not listing_map_result:
-        answer = "No relevant information was found in the selected documents."
         refs: list[dict] = []
         _persist_message(
             db,
             session_id=body.session_id,
             role="assistant",
-            content=answer,
+            content=REFUSAL_MESSAGE,
             references=refs,
             refused=True,
         )
-        yield {
-            "event": "content",
-            "delta": answer,
-        }
+        yield {"event": "content", "delta": REFUSAL_MESSAGE}
         yield {
             "event": "references",
             "references": refs,
@@ -611,113 +650,80 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
 
         hits = prioritize_overview_hits(hits)
 
+    tabular_overlay: str | None = None
     if listing_map_result:
         citation_map = listing_map_result["citation_map"]
         system_prompt = listing_map_result["reduce_prompt"]
-        coverage_report = {}
-    elif is_listing:
-        excerpt_chars = 1200
-    elif is_overview:
-        excerpt_chars = 800
-    elif understanding.intent == "factual_lookup":
-        excerpt_chars = 600
+        if body.tabular_review_id:
+            system_prompt = (
+                "Structured metadata from the active tabular review was applied per document during mapping.\n\n"
+                + system_prompt
+            )
     else:
-        excerpt_chars = 400
-    if not listing_map_result:
         doc_names = get_document_names(db, list({h.document_id for h in hits}))
         emitter.update_doc_names(doc_names)
         coverage_report = retrieval_diagnostics.get("coverage_report") or {}
-        citation_map = build_citation_map(
-            hits,
-            bundles,
+        citation_map, system_prompt = build_evidence_prompt_and_map(
+            db,
+            hits=hits,
+            query=body.message,
+            understanding=understanding,
+            bundles=bundles,
             doc_names=doc_names,
-            excerpt_chars=excerpt_chars,
-            question=body.message,
-            sub_questions=understanding.sub_questions,
-            prefer_amounts=is_overview,
-            prefer_listing=is_listing,
-            intent=understanding.intent,
-            coverage_goal=understanding.coverage_goal,
-            db=db,
             workspace_id=body.workspace_id,
+            is_listing=is_listing,
+            is_overview=is_overview,
+            coverage_report=coverage_report,
+            synthesis_mode=agent_policy.synthesis_mode if agent_policy else "chat",
+            agent_profile=agent_policy.agent_profile if agent_policy else "firm",
         )
-        target_entity = (
-            understanding.target_entity.canonical if understanding.target_entity else None
-        )
-        system_prompt = build_system_prompt(
-            citation_map,
-            intent=understanding.intent,
-            sub_questions=understanding.sub_questions,
-            target_entity=target_entity,
-            sub_question_coverage=coverage_report.get("sub_question_coverage"),
-            coverage_goal=understanding.coverage_goal,
-        )
-    if body.tabular_review_id and not listing_map_result:
-        from app.services.tabular import build_tabular_chat_context
+        if body.tabular_review_id:
+            from app.services.tabular import build_tabular_chat_context
 
-        from app.services.citations import TABULAR_CELL_CITE_HINT
+            from app.services.citations import TABULAR_CELL_CITE_HINT
 
-        tabular_ctx = build_tabular_chat_context(db, body.tabular_review_id)
-        if tabular_ctx:
-            system_prompt = f"{tabular_ctx}\n\n{TABULAR_CELL_CITE_HINT}\n\n{system_prompt}"
-    elif body.tabular_review_id and listing_map_result:
-        system_prompt = (
-            "Structured metadata from the active tabular review was applied per document during mapping.\n\n"
-            + system_prompt
-        )
-    if workflow_prompt:
-        system_prompt = f"{workflow_prompt}\n\n---\n\n{system_prompt}"
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": body.message},
-    ]
+            tabular_ctx = build_tabular_chat_context(db, body.tabular_review_id)
+            if tabular_ctx:
+                tabular_overlay = f"{tabular_ctx}\n\n{TABULAR_CELL_CITE_HINT}"
+
+    system_prompt = apply_prompt_overlays(
+        system_prompt,
+        tabular_overlay=tabular_overlay,
+        workflow_prefix=workflow_prompt,
+    )
 
     yield emitter.progress("generate", "start")
 
-    full_answer = ""
-    async for delta in stream_completion(messages=messages, role=ModelRole.LLM):
-        full_answer += delta
-        yield {"event": "content", "delta": delta}
-
-    validated, validation = validate_response(
-        full_answer,
-        citation_map,
-        mode=search_mode,
-        allow_partial_disclosure=body.allow_partial_disclosure,
-    )
-    judge_result = judge_citations(
-        validated,
-        citation_map,
-        intent=understanding.intent,
-    )
-    if (
-        judge_result.get("enabled")
-        and not judge_result.get("valid")
-        and settings.citation_judge_fail_closed
-        and understanding.intent in {"factual_lookup", "general"}
-    ):
-        validated = (
-            validated
-            + "\n\n_Note: Some claims could not be verified against cited sources._"
-        )
-    refs = references_for_api(citation_map)
-    _persist_message(
+    async for ev in stream_corpus_evidence_step(
         db,
-        session_id=body.session_id,
-        role="assistant",
-        content=validated,
-        references=refs,
-        refused=False,
-    )
-    yield {
-        "event": "references",
-        "references": refs,
-        "citation_validation": {
-            "markers_valid": validation.markers_valid,
-            "facts_stripped": validation.facts_stripped,
-            "markers_reassigned": validation.markers_reassigned,
-            "cross_bundle_violation": validation.cross_bundle_violation,
-            "judge": judge_result,
-        },
-    }
-    yield {"event": "done"}
+        body.workspace_id,
+        body.message,
+        hits=hits,
+        intent=understanding.intent,
+        bundles=bundles,
+        allow_partial_disclosure=body.allow_partial_disclosure,
+        search_mode=search_mode,
+        skip_refuse=True,
+        citation_map=citation_map,
+        system_prompt=system_prompt,
+    ):
+        if ev["event"] == "content":
+            yield ev
+        elif ev["event"] == "final":
+            validated = ev["content"]
+            refs = ev["references"]
+            _persist_message(
+                db,
+                session_id=body.session_id,
+                role="assistant",
+                content=validated,
+                references=refs,
+                refused=False,
+            )
+            yield {
+                "event": "references",
+                "references": refs,
+                "content": validated,
+                "citation_validation": ev["citation_validation"],
+            }
+            yield {"event": "done"}

@@ -54,6 +54,39 @@ def create_entity_extract_job(db: Session, document_id: str) -> str:
 # --- Query-side helpers (CARP) ---
 
 
+def _plausible_party_canonical(value: str) -> bool:
+    cleaned = value.strip()
+    return len(cleaned) >= 3 and "\n" not in cleaned
+
+
+def _surface_matches_party_canonical(surface: str, canonical_value: str) -> bool:
+    surface_cf = surface.casefold().strip()
+    cv_cf = canonical_value.casefold().strip()
+    if not _plausible_party_canonical(cv_cf):
+        return False
+    if surface_cf == cv_cf:
+        return True
+    if len(cv_cf) >= 3 and (surface_cf in cv_cf or cv_cf in surface_cf):
+        return True
+    return False
+
+
+def sanitize_party_canonicals(canonicals: list[str]) -> list[str]:
+    """Drop single-letter/noise entity canonicals before party document lookup."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in canonicals:
+        cleaned = raw.strip()
+        if not _plausible_party_canonical(cleaned):
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+    return out
+
+
 def resolve_party_canonicals(
     db: Session,
     workspace_id: str,
@@ -78,11 +111,13 @@ def resolve_party_canonicals(
 
     primary_cf = primary.casefold() if primary else ""
     for cv in rows:
+        if not _plausible_party_canonical(cv):
+            continue
         cv_cf = cv.casefold()
         if cv == canonical:
             matched.add(cv)
             continue
-        if any(s.casefold() == cv_cf or s.casefold() in cv_cf or cv_cf in s.casefold() for s in surfaces):
+        if any(_surface_matches_party_canonical(s, cv) for s in surfaces):
             matched.add(cv)
             continue
         if primary_cf and primary_cf in cv_cf:
@@ -90,7 +125,7 @@ def resolve_party_canonicals(
                 matched.add(cv)
     if canonical and not matched:
         matched.add(canonical)
-    return sorted(matched)
+    return sanitize_party_canonicals(sorted(matched))
 
 
 def lookup_documents_for_party(

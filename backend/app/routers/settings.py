@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import Settings, reload_settings, settings
+from app.services.agent_pack import agent_pack_available, agent_pack_error
 from app.services.components import install_component, list_components
 from app.services.model_router import llm_available
 from app.services.secrets_store import save_secrets, secrets_status
@@ -38,6 +39,15 @@ class SettingsOut(BaseModel):
     onboarding_complete: bool
     show_prompts_in_chat: bool
     agent_profile: str
+    enable_agent_mode: bool
+    chat_mode_default: str
+    agent_max_iterations: int
+    agent_scope_confirm_min_docs: int
+    agent_skip_scope_hitl: bool
+    mem0_store_on_run_end: bool
+    mem0_max_entries: int
+    agent_pack_installed: bool
+    agent_pack_error: str | None = None
     update_channel: str
     release_manifest_url: str
     llm_configured: bool
@@ -63,6 +73,13 @@ class SettingsUpdate(BaseModel):
     onboarding_complete: bool | None = None
     show_prompts_in_chat: bool | None = None
     agent_profile: str | None = None
+    enable_agent_mode: bool | None = None
+    chat_mode_default: str | None = None
+    agent_max_iterations: int | None = None
+    agent_scope_confirm_min_docs: int | None = None
+    agent_skip_scope_hitl: bool | None = None
+    mem0_store_on_run_end: bool | None = None
+    mem0_max_entries: int | None = None
     update_channel: str | None = None
     release_manifest_url: str | None = None
 
@@ -96,6 +113,15 @@ def _settings_to_out(s: Settings) -> SettingsOut:
         onboarding_complete=s.onboarding_complete,
         show_prompts_in_chat=s.show_prompts_in_chat,
         agent_profile=s.agent_profile,
+        enable_agent_mode=s.enable_agent_mode,
+        chat_mode_default=s.chat_mode_default,
+        agent_max_iterations=s.agent_max_iterations,
+        agent_scope_confirm_min_docs=s.agent_scope_confirm_min_docs,
+        agent_skip_scope_hitl=s.agent_skip_scope_hitl,
+        mem0_store_on_run_end=s.mem0_store_on_run_end,
+        mem0_max_entries=s.mem0_max_entries,
+        agent_pack_installed=agent_pack_available(),
+        agent_pack_error=agent_pack_error(),
         update_channel=s.update_channel,
         release_manifest_url=s.release_manifest_url,
         llm_configured=llm_available(),

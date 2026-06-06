@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     chat_overview_pool_k: int = 40
     chat_overview_top_k: int = 20
     chat_overview_max_chunks_per_page: int = 2
+    overview_page_context_max_docs: int = 3
+    overview_max_pages_per_doc: int = 8
+    overview_party_scoped_max_pages: int = 12
+    overview_excerpt_chars: int = 2500
     chat_listing_pool_k: int = 48
     chat_listing_top_k: int = 24
     chat_listing_min_chunks_per_doc: int = 2
@@ -111,6 +115,22 @@ class Settings(BaseSettings):
     chat_listing_map_excerpt_chars: int = 1200
     chat_listing_discovery_always_fts: bool = True
     chat_listing_discovery_doc_limit: int = 64
+    agent_listing_discovery_doc_limit: int = 96
+    agent_listing_map_chunks_per_doc: int = 6
+    agent_listing_map_max_docs: int = 16
+    agent_listing_map_excerpt_chars: int = 1600
+    agent_listing_top_k: int = 32
+    firm_agent_listing_discovery_doc_limit: int = 96
+    firm_agent_listing_map_max_docs: int = 16
+    court_agent_listing_discovery_doc_limit: int = 48
+    court_agent_listing_map_max_docs: int = 10
+    listing_map_reduce_min_docs: int = 4
+    listing_max_pages_per_doc: int = 6
+    agent_listing_max_pages_per_doc: int = 8
+    listing_max_chars_per_page: int = 8000
+    listing_large_doc_page_threshold: int = 50
+    listing_disable_focus_excerpts: bool = True
+    listing_cross_page_refs_max: int = 2
     carp_top_k_bundles: int = 8
 
     enable_context_expansion: bool = True
@@ -147,6 +167,41 @@ class Settings(BaseSettings):
     onboarding_complete: bool = False
     show_prompts_in_chat: bool = False
     agent_profile: str = "firm"
+    enable_agent_mode: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ENABLE_AGENT_MODE", "enable_agent_mode"),
+    )
+    chat_mode_default: str = Field(
+        default="rag",
+        validation_alias=AliasChoices("CHAT_MODE_DEFAULT", "chat_mode_default"),
+    )
+    agent_max_iterations: int = Field(
+        default=5,
+        validation_alias=AliasChoices("AGENT_MAX_ITERATIONS", "agent_max_iterations"),
+    )
+    agent_scope_confirm_min_docs: int = Field(
+        default=10,
+        validation_alias=AliasChoices(
+            "AGENT_SCOPE_CONFIRM_MIN_DOCS",
+            "agent_scope_confirm_min_docs",
+        ),
+    )
+    agent_skip_scope_hitl: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("AGENT_SKIP_SCOPE_HITL", "agent_skip_scope_hitl"),
+    )
+    mem0_data_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MEM0_DATA_DIR", "mem0_data_dir"),
+    )
+    mem0_store_on_run_end: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MEM0_STORE_ON_RUN_END", "mem0_store_on_run_end"),
+    )
+    mem0_max_entries: int = Field(
+        default=0,
+        validation_alias=AliasChoices("MEM0_MAX_ENTRIES", "mem0_max_entries"),
+    )
     release_manifest_url: str = Field(
         default="https://raw.githubusercontent.com/iamsaurabhc/picard-oss/gh-pages/releases/manifest.json",
         validation_alias="PICARD_RELEASE_MANIFEST_URL",
@@ -166,6 +221,12 @@ class Settings(BaseSettings):
     @property
     def pdfs_dir(self) -> Path:
         return self.picard_data_dir / "pdfs"
+
+    @property
+    def mem0_dir(self) -> Path:
+        if self.mem0_data_dir:
+            return Path(self.mem0_data_dir)
+        return self.picard_data_dir / "mem0"
 
     @property
     def embedding_model_cache_path(self) -> Path:

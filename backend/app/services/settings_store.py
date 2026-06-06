@@ -80,6 +80,13 @@ USER_SETTING_KEYS = frozenset(
         "onboarding_complete",
         "show_prompts_in_chat",
         "agent_profile",
+        "enable_agent_mode",
+        "chat_mode_default",
+        "agent_max_iterations",
+        "agent_scope_confirm_min_docs",
+        "agent_skip_scope_hitl",
+        "mem0_store_on_run_end",
+        "mem0_max_entries",
     }
 )
 

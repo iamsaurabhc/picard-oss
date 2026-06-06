@@ -38,12 +38,12 @@ DEFAULT_OVERVIEW_FACETS = [
 
 # Generic legal dimensions — no corpus-specific tokens
 DEFAULT_FACET_QUERIES: dict[str, list[str]] = {
-    "parties": ["plaintiff", "defendant"],
-    "central_facts": ["facts", "occurred"],
-    "damages": ["damages", "claimed"],
-    "dates": ["date", "trial"],
-    "court": ["court", "jurisdiction"],
-    "outcome": ["judgment", "appeal"],
+    "parties": ["plaintiff", "defendant", "informant"],
+    "central_facts": ["facts", "occurred", "alleged"],
+    "damages": ["damages", "claimed", "relief"],
+    "dates": ["date", "trial", "filed"],
+    "court": ["court", "jurisdiction", "commission"],
+    "outcome": ["judgment", "appeal", "order"],
 }
 
 INTENT_KEYWORDS = {
@@ -228,10 +228,20 @@ def _is_entity_matter_listing_query(query: str) -> bool:
     if not settings.enable_regex_nlp:
         return _looks_like_entity_listing_query(query)
     q = query.casefold()
+    if re.search(
+        r"\blist\s+all\s+.*\bcase\s+details?\s+(?:against|involving|re)\b",
+        q,
+    ):
+        return True
+    if re.search(r"\blist\s+all\b", q) and re.search(
+        r"\bcase\s+details?\s+(?:against|involving|re)\b", q
+    ):
+        return True
     if _case_name_terms(query) and not re.search(
         r"\b(?:cases|matters|proceedings|complaints)\s+(?:against|involving|re)\b", q
     ):
-        return False
+        if not re.search(r"\bcase\s+details?\s+(?:against|involving|re)\b", q):
+            return False
     if re.search(
         r"\blist\s+all\s+(?:the\s+)?(?:cases|matters|proceedings|complaints|documents)\b"
         r".*\b(?:against|involving|re)\b",
@@ -260,6 +270,25 @@ def _looks_like_entity_listing_query(query: str) -> bool:
     if not any(h in q for h in _LISTING_SCOPE_HINTS):
         return False
     return any(h in q for h in _LISTING_QUERY_HINTS) or ("list" in q and "all" in q)
+
+
+def _party_from_filed_by_phrase(query: str) -> QueryConstraint | None:
+    """Extract informant/filer after 'filed by' (e.g. case details filed by Kshitiz Arya in CCI)."""
+    m = re.search(
+        r"\bfiled\s+by\s+(.+?)(?:\s+in\s+|\s+at\s+|\s+before\s+|\s+with\s+|\?|$)",
+        query,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    surface = re.sub(r"\s+", " ", m.group(1).strip(" ?.,;"))
+    if len(surface) < 3:
+        return None
+    return QueryConstraint(
+        type="party",
+        canonical=normalize_party(surface),
+        surfaces=[surface],
+    )
 
 
 def _party_from_listing_phrase(query: str) -> QueryConstraint | None:
@@ -349,6 +378,36 @@ def _extract_listing_target_entity(query: str) -> QueryConstraint | None:
     return None
 
 
+def _extract_listing_v_party_constraints(query: str) -> list[QueryConstraint]:
+    """Both parties from 'involving X v Y' listing queries (e.g. Google v CUTS)."""
+    if not re.search(r"\binvolving\b", query, re.IGNORECASE):
+        return []
+    if not re.search(r"\s+v\.?\s+", query, re.IGNORECASE):
+        return []
+    parts = re.split(r"\s+v\.?\s+", query, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return []
+    left = re.sub(r"\s+", " ", parts[0].strip())
+    q_left = left.casefold()
+    for marker in ("involving ", "against ", "re "):
+        if marker in q_left:
+            idx = q_left.index(marker) + len(marker)
+            left = left[idx:].strip()
+            break
+    right = re.sub(r"\s+", " ", parts[1].strip(" ?.,;"))
+    out: list[QueryConstraint] = []
+    for surface in (left, right):
+        if len(surface) >= 3:
+            out.append(
+                QueryConstraint(
+                    type="party",
+                    canonical=normalize_party(surface),
+                    surfaces=[surface],
+                )
+            )
+    return out
+
+
 def _is_case_overview_query(query: str) -> bool:
     if not settings.enable_regex_nlp:
         return False
@@ -364,6 +423,10 @@ def _is_case_overview_query(query: str) -> bool:
             return False
         return True
     if re.search(r"\bcase\s+details\b", q) and re.search(r"\binvolving\b", q):
+        if re.search(r"\blist\s+all\b", q):
+            return False
+        return True
+    if re.search(r"\bcase\s+details\b.*\bfiled\s+by\b", q):
         return True
     return False
 
@@ -484,6 +547,14 @@ def _should_use_case_overview_not_listing(query: str, case_terms: list[str] | No
     if not case_terms:
         return False
     q = query.casefold()
+    if re.search(r"\blist\s+all\b", q) and re.search(
+        r"\bcase\s+details?\s+(?:against|involving|re)\b", q
+    ):
+        return False
+    if re.search(r"\blist\s+all\b", q) and re.search(
+        r"\b(?:cases|matters|proceedings|complaints)\s+(?:against|involving|re)\b", q
+    ):
+        return False
     if not re.search(r"\b(?:case\s+details?|matter\s+details?)\b", q):
         return False
     if re.search(r"\b(?:cases|matters|proceedings|complaints)\s+(?:against|involving|re)\b", q):
@@ -583,16 +654,43 @@ def _apply_listing_fields(
             break
     if not entity and settings.enable_regex_nlp:
         entity = _extract_listing_target_entity(query)
+    v_parties = _extract_listing_v_party_constraints(query)
+    if v_parties:
+        seen_party = {c.canonical.casefold() for c in understanding.constraints if c.type == "party"}
+        for vp in v_parties:
+            if vp.canonical.casefold() not in seen_party:
+                understanding.constraints.append(vp)
+                seen_party.add(vp.canonical.casefold())
+        if not entity:
+            entity = v_parties[0]
     if not entity:
         return understanding
     resolved: list[str] = []
+    party_constraints = [c for c in understanding.constraints if c.type == "party"]
+    if not party_constraints:
+        party_constraints = [entity]
     if db is not None and workspace_id:
-        resolved = resolve_party_canonicals(
-            db,
-            workspace_id,
-            canonical=entity.canonical,
-            surfaces=entity.surfaces,
-        )
+        for pc in party_constraints:
+            resolved.extend(
+                resolve_party_canonicals(
+                    db,
+                    workspace_id,
+                    canonical=pc.canonical,
+                    surfaces=pc.surfaces,
+                )
+            )
+    if resolved:
+        seen_r: set[str] = set()
+        deduped: list[str] = []
+        for r in resolved:
+            key = r.casefold()
+            if key in seen_r:
+                continue
+            seen_r.add(key)
+            deduped.append(r)
+        resolved = deduped
+    else:
+        resolved = [entity.canonical]
     understanding.target_entity = TargetEntity(
         canonical=entity.canonical,
         surfaces=entity.surfaces,
@@ -624,7 +722,13 @@ def _needs_listing_pass_expansion(passes: list[SearchPass]) -> bool:
     return len(passes) < 3
 
 
-def _apply_overview_fields(understanding: QueryUnderstanding, query: str) -> QueryUnderstanding:
+def _apply_overview_fields(
+    understanding: QueryUnderstanding,
+    query: str,
+    *,
+    db: Session | None = None,
+    workspace_id: str | None = None,
+) -> QueryUnderstanding:
     if understanding.intent != "case_overview":
         return understanding
     case_terms = _case_name_terms(query) or understanding.fts.must_terms[:2]
@@ -633,6 +737,57 @@ def _apply_overview_fields(understanding: QueryUnderstanding, query: str) -> Que
         understanding.overview_facets = list(DEFAULT_OVERVIEW_FACETS)
     if case_terms and not understanding.fts.must_terms:
         understanding.fts.must_terms = case_terms
+
+    if not _case_name_terms(query):
+        party: QueryConstraint | None = None
+        for c in understanding.constraints:
+            if c.type == "party":
+                party = c
+                break
+        if not party:
+            party = _party_from_filed_by_phrase(query)
+        if not party and db is not None and workspace_id:
+            party = _catalog_party_constraint(db, workspace_id, query)
+        if party:
+            seen = {c.canonical.casefold() for c in understanding.constraints if c.type == "party"}
+            if party.canonical.casefold() not in seen:
+                understanding.constraints.append(party)
+            resolved: list[str] = []
+            if db is not None and workspace_id:
+                resolved = resolve_party_canonicals(
+                    db,
+                    workspace_id,
+                    canonical=party.canonical,
+                    surfaces=party.surfaces,
+                )
+            understanding.target_entity = TargetEntity(
+                canonical=party.canonical,
+                surfaces=party.surfaces,
+                resolved_canonicals=resolved or [party.canonical],
+            )
+            terms = _dedupe_terms(
+                [t for t in party.canonical.split() if len(t) > 2]
+                + [t.casefold() for s in party.surfaces for t in s.split() if len(t) > 2]
+            )
+            if terms:
+                understanding.fts.must_terms = terms[:3]
+                if party.surfaces:
+                    understanding.fts.phrases = [party.surfaces[0]]
+                anchor_terms = terms[:2]
+                understanding.search_passes = [
+                    SearchPass(
+                        label="party_anchor",
+                        fts_terms=anchor_terms,
+                        operator="AND" if len(anchor_terms) >= 2 else "OR",
+                        pin_best=True,
+                    ),
+                    *[
+                        sp
+                        for sp in understanding.search_passes
+                        if sp.label not in {"party_anchor", "entity_anchor"}
+                    ],
+                ]
+
     return understanding
 
 
@@ -1009,6 +1164,36 @@ def _dedupe_terms(tokens: list[str]) -> list[str]:
     return out
 
 
+_OVERVIEW_FACET_SUB_QUESTIONS: dict[str, tuple[str, list[str]]] = {
+    "parties": ("Who are the parties?", ["plaintiff", "defendant", "informant"]),
+    "central_facts": ("What are the central facts?", ["facts", "occurred", "alleged"]),
+    "damages": ("What damages or relief was claimed?", ["damages", "relief", "penalty"]),
+    "dates": ("What are key dates and procedural history?", ["date", "filed", "period"]),
+    "court": ("What court or forum heard the case?", ["court", "commission", "forum"]),
+    "outcome": ("What was the outcome or holding?", ["judgment", "order", "disposition"]),
+}
+
+
+def _overview_sub_questions_from_facets(facets: list[str] | None = None) -> list[SubQuestion]:
+    """Facet-driven sub-questions for case overview (dynamic, not corpus-specific)."""
+    labels = facets or DEFAULT_OVERVIEW_FACETS
+    out: list[SubQuestion] = []
+    for label in labels:
+        spec = _OVERVIEW_FACET_SUB_QUESTIONS.get(label)
+        if not spec:
+            continue
+        question, terms = spec
+        out.append(
+            SubQuestion(
+                label=label,
+                question=question,
+                fts_terms=terms,
+                pin_best=True,
+            )
+        )
+    return out
+
+
 def _compound_sub_questions_from_query(query: str) -> list[SubQuestion]:
     """Emit sub-questions for compound factual queries without regex intent classifiers."""
     q = query.casefold()
@@ -1204,7 +1389,9 @@ def understand_query(
     )
     understanding.retrieval_mode = mode
     understanding = _validate_retrieval_plan(understanding, query, used_llm=understanding.used_llm)
-    understanding = _apply_overview_fields(understanding, query)
+    understanding = _apply_overview_fields(
+        understanding, query, db=db, workspace_id=workspace_id,
+    )
     understanding = _apply_listing_fields(
         understanding, query, db=db, workspace_id=workspace_id,
     )
@@ -1261,8 +1448,27 @@ def understand_query(
         understanding.facet_queries = _facet_queries_from_passes(repaired)
 
     if understanding.search_passes:
-        understanding.fts.must_terms = list(understanding.search_passes[0].fts_terms[:2])
-        understanding.fts.operator = understanding.search_passes[0].operator
+        if understanding.target_entity and understanding.intent == "case_overview":
+            party_terms = [
+                t
+                for t in understanding.target_entity.canonical.split()
+                if len(t) > 2
+            ]
+            if party_terms:
+                understanding.fts.must_terms = party_terms[:3]
+                understanding.fts.operator = "AND"
+            else:
+                understanding.fts.must_terms = list(understanding.search_passes[0].fts_terms[:2])
+                understanding.fts.operator = understanding.search_passes[0].operator
+        else:
+            understanding.fts.must_terms = list(understanding.search_passes[0].fts_terms[:2])
+            understanding.fts.operator = understanding.search_passes[0].operator
+
+    if understanding.intent == "case_overview" and not understanding.sub_questions:
+        facets = understanding.overview_facets or DEFAULT_OVERVIEW_FACETS
+        understanding = understanding.model_copy(
+            update={"sub_questions": _overview_sub_questions_from_facets(facets)},
+        )
 
     return understanding
 

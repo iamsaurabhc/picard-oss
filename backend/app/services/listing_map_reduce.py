@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -11,29 +10,22 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.prompts.legal_rag import contrastive_block_for_listing_phase, preamble_for_variant
 from app.schemas import SearchHit
-from app.services.carp import _load_page_chunks
+from app.services.citation_kernel import merge_evidence_maps
 from app.services.citations import (
     CitationMap,
-    CitationRef,
     build_citation_map,
+    format_sources_for_prompt,
 )
 from app.services.document_context import build_document_context
-from app.services.entity_index import (
-    count_documents_for_party,
-    lookup_pages_for_party_in_document,
-)
-from app.services.entity_page_chunks import (
-    chunks_from_entity_mentions_per_doc,
-    merge_search_hits,
+from app.services.entity_index import count_documents_for_party
+from app.services.entity_page_context import (
+    cross_page_reference_hits,
+    party_canonicals_from_understanding,
+    retrieve_listing_page_hits,
 )
 from app.services.model_router import ModelRole, completion, stream_completion
-from app.services.pass_retrieval import run_search_passes_for_document
-from app.services.planned_retrieval import _fts_hit_to_search_hit
-from app.services.query_understanding import QueryUnderstanding, SearchPass
+from app.services.query_understanding import QueryUnderstanding
 from app.services.retrieval_progress import RetrievalProgressEmitter
-
-_MARKER_RE = re.compile(r"\[(\d+)\]")
-
 
 @dataclass
 class ListingDocBrief:
@@ -44,31 +36,7 @@ class ListingDocBrief:
 
 
 def _canonicals_from_understanding(understanding: QueryUnderstanding) -> list[str]:
-    target = understanding.target_entity
-    if target and target.resolved_canonicals:
-        return list(target.resolved_canonicals)
-    if target:
-        return [target.canonical]
-    for c in understanding.constraints:
-        if c.type == "party":
-            return [c.canonical]
-    return []
-
-
-def _search_passes_for(understanding: QueryUnderstanding) -> list[SearchPass]:
-    passes = list(understanding.search_passes)
-    if passes:
-        return passes
-    terms = list(understanding.fts.must_terms[:2])
-    if not terms and understanding.target_entity:
-        terms = [
-            t for t in understanding.target_entity.canonical.split() if len(t) > 2
-        ][:2]
-    if terms:
-        return [
-            SearchPass(label="entity_anchor", fts_terms=terms, operator="OR", pin_best=False)
-        ]
-    return []
+    return party_canonicals_from_understanding(understanding)
 
 
 def retrieve_hits_for_listing_document(
@@ -79,53 +47,37 @@ def retrieve_hits_for_listing_document(
     understanding: QueryUnderstanding,
     query: str,
     canonicals: list[str],
+    agent_deep: bool = False,
     chunks_per_doc: int | None = None,
-) -> list[SearchHit]:
-    """Per-document FTS passes, entity page seeds, and fair entity-mention chunks."""
-    cap = chunks_per_doc or settings.chat_listing_map_chunks_per_doc
-    search_passes = _search_passes_for(understanding)
-    entity_pages = lookup_pages_for_party_in_document(
-        db, workspace_id, document_id, canonicals,
-    )
-    page_hint = entity_pages or None
-    pass_top_k = max(cap, 4)
-
-    fts_hits = run_search_passes_for_document(
+) -> tuple[list[SearchHit], dict]:
+    """Entity-ranked full-page context for one listing document."""
+    del chunks_per_doc
+    hits, diag = retrieve_listing_page_hits(
         db,
         workspace_id=workspace_id,
         document_id=document_id,
+        understanding=understanding,
         query=query,
-        search_passes=search_passes,
-        anchor_plan=understanding.fts,
-        page_hint=page_hint,
-        pass_top_k=pass_top_k,
-        max_chunks_per_doc=cap,
+        canonicals=canonicals,
+        agent_deep=agent_deep,
     )
-    hits = [_fts_hit_to_search_hit(h) for h in fts_hits]
-
-    if page_hint:
-        for page in sorted(page_hint)[:6]:
-            for ph in _load_page_chunks(db, document_id, page):
-                hits = merge_search_hits(hits, [_fts_hit_to_search_hit(ph)])
-
-    entity_hits = chunks_from_entity_mentions_per_doc(
+    extra = cross_page_reference_hits(
         db,
-        workspace_id,
-        [document_id],
-        per_doc_limit=cap,
+        workspace_id=workspace_id,
+        document_id=document_id,
+        understanding=understanding,
+        query=query,
+        seed_hits=hits,
+        canonicals=canonicals,
     )
-    hits = merge_search_hits(hits, entity_hits)
-
-    seen: set[str] = set()
-    capped: list[SearchHit] = []
-    for h in sorted(hits, key=lambda x: x.score):
-        if h.chunk_id in seen:
-            continue
-        seen.add(h.chunk_id)
-        capped.append(h)
-        if len(capped) >= cap:
-            break
-    return capped
+    if extra:
+        seen_pages = {h.page_number for h in hits}
+        for h in extra:
+            if h.page_number not in seen_pages:
+                hits.append(h)
+                seen_pages.add(h.page_number)
+        diag["cross_page_added"] = len(extra)
+    return hits, diag
 
 
 def build_listing_map_prompt(
@@ -134,10 +86,15 @@ def build_listing_map_prompt(
     file_name: str,
     target_entity: str,
     metadata_block: str = "",
+    agent_deep: bool = False,
 ) -> str:
     preamble = preamble_for_variant(settings.prompt_variant)
-    contrastive = contrastive_block_for_listing_phase("map")
-    excerpt_cap = settings.chat_listing_map_excerpt_chars
+    contrastive = contrastive_block_for_listing_phase("map", agent_deep=agent_deep)
+    excerpt_cap = (
+        settings.agent_listing_map_excerpt_chars
+        if agent_deep
+        else settings.chat_listing_map_excerpt_chars
+    )
     lines = [
         preamble,
         "",
@@ -150,16 +107,26 @@ def build_listing_map_prompt(
         "Output markdown bullets only (no ## heading):",
         "- **Role of party:** defendant/respondent/opposite party — only if stated [N]",
         "- **Other parties / counterparties:** informants, complainants, co-respondents [N]",
+    ]
+    if agent_deep:
+        lines.extend([
+            "- **Case / matter id:** case number, diary number, investigation id — only if stated [N]",
+            "- **Dates / chronology:** filing, order, hearing dates — only if stated [N]",
+        ])
+    lines.extend([
         "- **Forum / statute:** court, commission, act sections [N]",
-        "- **Key facts:** who filed against whom, allegations, provisions [N]",
-        "- **Outcome / stage:** disposition, order, stage, penalty — only if stated [N]",
+        "- **Procedural posture:** informant, respondent, stage of proceeding [N]",
+        "- **Key facts / allegations:** who filed against whom, provisions, findings — only if stated [N]",
+        "- **Outcome / reliefs:** disposition, order, penalty, next step — only if stated [N]",
+    ])
+    lines.extend([
         "",
         "Rules:",
         "- Every factual bullet MUST include inline [N] from Sources below.",
         "- Use citation numbers only from this document's Sources.",
         "- If excerpts are thin, write one bullet: 'Limited detail in retrieved excerpts' with any cite you have.",
         "- Do not invent citation numbers.",
-    ]
+    ])
     if metadata_block.strip():
         hint = (
             "Use tabular metadata above for structure"
@@ -188,9 +155,12 @@ def build_listing_reduce_prompt(
     target_entity: str,
     total_discovered: int,
     shown_count: int,
+    agent_deep: bool = False,
+    citation_map: CitationMap | None = None,
+    doc_names: dict[str, str] | None = None,
 ) -> str:
     preamble = preamble_for_variant(settings.prompt_variant)
-    contrastive = contrastive_block_for_listing_phase("reduce")
+    contrastive = contrastive_block_for_listing_phase("reduce", agent_deep=agent_deep)
     entity_label = target_entity or "the named party"
     coverage_note = ""
     if total_discovered > shown_count:
@@ -221,13 +191,13 @@ def build_listing_reduce_prompt(
         "",
         "Then one markdown section per document brief below:",
         "## [Document filename exactly as given in the brief header]",
-        "Paste the brief bullets under each heading; keep inline [N] citations unchanged.",
+        "Expand each section into substantive professional detail (multiple bullets or short paragraphs).",
+        "Use briefs for structure; add facts only when supported by per-document sources below.",
         "",
         "Rules:",
         "- Do NOT merge facts across documents into one narrative.",
-        "- Do NOT re-interpret or add facts beyond the briefs.",
         "- Include every document brief below as its own ## section.",
-        "- Keep citation markers [N] exactly as in the briefs.",
+        "- Keep citation markers [N] exactly as in the briefs and sources.",
         "- Do not invent citation numbers.",
         "",
         "Per-document briefs:",
@@ -236,52 +206,36 @@ def build_listing_reduce_prompt(
         lines.append(f"### Brief for: {file_name}")
         lines.append(brief_md.strip() or "- Limited detail in retrieved excerpts.")
         lines.append("")
+    if citation_map and citation_map.refs:
+        excerpt_cap = (
+            settings.agent_listing_map_excerpt_chars
+            if agent_deep
+            else settings.chat_listing_map_excerpt_chars
+        )
+        lines.extend([
+            "",
+            "Per-document sources (expand briefs using these; cite with existing [N] only):",
+            format_sources_for_prompt(
+                citation_map,
+                intent="entity_matter_listing",
+                excerpt_cap=excerpt_cap,
+                group_by_document=True,
+                doc_names=doc_names,
+            ),
+        ])
     return "\n".join(lines)
-
-
-def _renumber_markers(text: str, offset: int) -> str:
-    def _repl(m: re.Match) -> str:
-        return f"[{int(m.group(1)) + offset}]"
-
-    return _MARKER_RE.sub(_repl, text)
 
 
 def merge_listing_briefs(
     briefs: list[ListingDocBrief],
 ) -> tuple[list[tuple[str, str]], CitationMap]:
     """Combine per-doc briefs into global citation map and renumbered section text."""
-    global_refs: list[CitationRef] = []
-    chunk_to_index: dict[str, int] = {}
-    sections: list[tuple[str, str]] = []
-
-    for brief in briefs:
-        offset = len(global_refs)
-        for ref in brief.citation_map.refs:
-            new_index = len(global_refs) + 1
-            global_refs.append(
-                CitationRef(
-                    index=new_index,
-                    chunk_id=ref.chunk_id,
-                    document_id=ref.document_id,
-                    page=ref.page,
-                    bbox=ref.bbox,
-                    preview=ref.preview,
-                    bundle_id=ref.bundle_id,
-                    document_name=ref.document_name,
-                    heading_path=ref.heading_path,
-                    pinpoint_quote=ref.pinpoint_quote,
-                )
-            )
-            chunk_to_index[ref.chunk_id] = new_index
-
-        section_body = _renumber_markers(brief.brief_markdown, offset)
-        sections.append((brief.file_name, section_body))
-
-    combined_map = CitationMap(
-        refs=global_refs,
-        chunk_id_to_index=chunk_to_index,
-        bundle_chunk_ids={},
-    )
+    steps = [(b.citation_map, b.brief_markdown) for b in briefs]
+    combined_map, renumbered = merge_evidence_maps(steps)
+    sections = [
+        (briefs[i].file_name, renumbered[i] or "")
+        for i in range(len(briefs))
+    ]
     return sections, combined_map
 
 
@@ -296,14 +250,16 @@ def map_document_to_brief(
     canonicals: list[str],
     doc_names: dict[str, str],
     tabular_review_id: str | None = None,
+    agent_deep: bool = False,
 ) -> ListingDocBrief:
-    hits = retrieve_hits_for_listing_document(
+    hits, _page_diag = retrieve_hits_for_listing_document(
         db,
         workspace_id=workspace_id,
         document_id=document_id,
         understanding=understanding,
         query=query,
         canonicals=canonicals,
+        agent_deep=agent_deep,
     )
     meta_parts: list[str] = []
     if tabular_review_id:
@@ -329,7 +285,11 @@ def map_document_to_brief(
         )
     meta = "\n\n".join(meta_parts)
 
-    excerpt_chars = settings.chat_listing_map_excerpt_chars
+    excerpt_chars = (
+        settings.agent_listing_map_excerpt_chars
+        if agent_deep
+        else settings.chat_listing_map_excerpt_chars
+    )
     citation_map = build_citation_map(
         hits,
         None,
@@ -338,6 +298,7 @@ def map_document_to_brief(
         question=query,
         sub_questions=understanding.sub_questions,
         prefer_listing=True,
+        page_level=True,
         intent="entity_matter_listing",
         coverage_goal=understanding.coverage_goal,
         db=db,
@@ -351,6 +312,7 @@ def map_document_to_brief(
         file_name=file_name,
         target_entity=target,
         metadata_block=meta,
+        agent_deep=agent_deep,
     )
     messages = [
         {"role": "system", "content": prompt},
@@ -374,10 +336,16 @@ def should_use_listing_map_reduce(
     enabled: bool | None = None,
     tabular_review_id: str | None = None,
     db: Session | None = None,
+    document_ids: list[str] | None = None,
 ) -> bool:
-    del tabular_review_id, db  # discovery union makes tabular optional; gate on doc count only
+    del tabular_review_id, db
     use = settings.enable_listing_map_reduce if enabled is None else enabled
-    return use and len(document_ids_discovered) >= 2
+    effective = list(document_ids_discovered)
+    if document_ids:
+        scoped = set(document_ids)
+        effective = [d for d in document_ids_discovered if d in scoped]
+    count = len(effective) if effective else len(document_ids_discovered)
+    return use and count >= settings.listing_map_reduce_min_docs
 
 
 def run_listing_map_reduce_with_progress(
@@ -391,6 +359,8 @@ def run_listing_map_reduce_with_progress(
     documents_total_discovered: int | None = None,
     tabular_review_id: str | None = None,
     emitter: RetrievalProgressEmitter | None = None,
+    agent_deep: bool = False,
+    map_max_docs: int | None = None,
 ) -> Iterator[dict]:
     """Map each discovered document to a brief, then yield reduce-ready artifacts."""
     progress = emitter or RetrievalProgressEmitter()
@@ -404,7 +374,12 @@ def run_listing_map_reduce_with_progress(
         if total_discovered == 0:
             total_discovered = len(document_ids_discovered)
 
-    max_map = settings.chat_listing_map_max_docs
+    if map_max_docs is not None:
+        max_map = map_max_docs
+    elif agent_deep:
+        max_map = settings.agent_listing_map_max_docs
+    else:
+        max_map = settings.chat_listing_map_max_docs
     ordered = list(document_ids_discovered)[:max_map]
     doc_names = progress.doc_names
 
@@ -424,6 +399,7 @@ def run_listing_map_reduce_with_progress(
             document_id=doc_id,
             document_name=file_name,
         )
+        yield progress.progress("page_rank", "start", document_id=doc_id, document_name=file_name)
         brief = map_document_to_brief(
             db,
             workspace_id=workspace_id,
@@ -434,14 +410,24 @@ def run_listing_map_reduce_with_progress(
             canonicals=canonicals,
             doc_names=doc_names,
             tabular_review_id=tabular_review_id,
+            agent_deep=agent_deep,
         )
         briefs.append(brief)
+        pages_selected = sorted({r.page for r in brief.citation_map.refs})
+        yield progress.progress(
+            "page_rank",
+            "done",
+            document_id=doc_id,
+            document_name=file_name,
+            pages_selected=pages_selected,
+        )
         yield progress.progress(
             "map",
             "done",
             document_id=doc_id,
             document_name=file_name,
             chunk_count=len(brief.citation_map.refs),
+            pages_selected=pages_selected,
         )
 
     yield progress.progress("map", "done", brief_count=len(briefs))
@@ -455,7 +441,17 @@ def run_listing_map_reduce_with_progress(
         target_entity=target or "",
         total_discovered=total_discovered,
         shown_count=len(briefs),
+        agent_deep=agent_deep,
+        citation_map=citation_map,
+        doc_names=doc_names,
     )
+    if agent_deep:
+        reduce_prompt = (
+            "Synthesize a multi-document legal catalog (Agent mode). "
+            "Use per-file ## [filename] sections with forum, case numbers, allegations, "
+            "and outcomes when present in the briefs. Do not use case_overview skeleton headings.\n\n"
+            + reduce_prompt
+        )
 
     diagnostics = {
         "listing_map_reduce": True,

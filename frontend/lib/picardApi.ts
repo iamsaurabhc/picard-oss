@@ -84,6 +84,15 @@ export type AppSettings = {
   onboarding_complete: boolean;
   show_prompts_in_chat: boolean;
   agent_profile: string;
+  enable_agent_mode: boolean;
+  chat_mode_default: string;
+  agent_max_iterations: number;
+  agent_scope_confirm_min_docs: number;
+  agent_skip_scope_hitl: boolean;
+  mem0_store_on_run_end: boolean;
+  mem0_max_entries: number;
+  agent_pack_installed: boolean;
+  agent_pack_error: string | null;
   update_channel: string;
   release_manifest_url: string;
   llm_configured: boolean;
@@ -109,7 +118,27 @@ export type AppSettingsUpdate = {
   onboarding_complete?: boolean;
   show_prompts_in_chat?: boolean;
   agent_profile?: string;
+  enable_agent_mode?: boolean;
+  chat_mode_default?: string;
+  agent_max_iterations?: number;
+  agent_scope_confirm_min_docs?: number;
+  agent_skip_scope_hitl?: boolean;
+  mem0_store_on_run_end?: boolean;
+  mem0_max_entries?: number;
   update_channel?: string;
+};
+
+export type AgentRun = {
+  id: string;
+  session_id: string | null;
+  workspace_id: string;
+  profile: string;
+  mode: string;
+  plan_json: Record<string, unknown> | null;
+  events: Record<string, unknown>[];
+  status: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type WorkflowType = "assistant" | "tabular" | "lightflow";
@@ -296,6 +325,8 @@ export type ChatStreamRequest = {
   session_id: string;
   workspace_id: string;
   message: string;
+  mode?: "rag" | "agent";
+  approval_token?: string;
   document_ids?: string[];
   retrieval_mode?: "auto" | "simple" | "multi_constraint";
   allow_partial_disclosure?: boolean;
@@ -363,7 +394,15 @@ export type TabularStreamEvent =
   | { event: "batch_complete"; review_id: string; done: number; errors: number }
   | { event: "error"; detail: string };
 
-export type ChatProgressPhase = "understanding" | "search" | "rank" | "generate";
+export type ChatProgressPhase =
+  | "understanding"
+  | "search"
+  | "page_rank"
+  | "coverage"
+  | "map"
+  | "reduce"
+  | "rank"
+  | "generate";
 export type ChatProgressStatus = "start" | "done";
 
 export type ChatStreamEvent =
@@ -398,9 +437,30 @@ export type ChatStreamEvent =
     }
   | { event: "retrieval"; chunk_count: number; bundle_count: number; refused: boolean; mode: string; diagnostics?: Record<string, unknown> }
   | { event: "content"; delta: string }
-  | { event: "references"; references: ChatReference[]; refused?: boolean; suggestions?: string[] }
+  | {
+      event: "references";
+      references: ChatReference[];
+      content?: string;
+      refused?: boolean;
+      suggestions?: string[];
+    }
   | { event: "done" }
-  | { event: "error"; detail: string };
+  | { event: "error"; detail?: string; message?: string }
+  | { event: "memory_hit"; memories: string[] }
+  | { event: "plan"; plan?: string }
+  | {
+      event: "approval_required";
+      kind: "scope" | "plan";
+      token: string;
+      document_count?: number;
+      document_ids?: string[];
+      flow_json?: WorkflowRecord["flow_json"];
+    }
+  | { event: "tool_call"; tool?: string; arguments?: unknown }
+  | { event: "tool_result"; tool?: string; output?: unknown }
+  | { event: "workflow_draft"; flow_json: WorkflowRecord["flow_json"]; goal?: string }
+  | { event: "workflow_applied"; workflow_id: string; title?: string }
+  | { event: "step_refused"; tool?: string; query?: string };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
@@ -516,6 +576,7 @@ export const picardApi = {
     request<void>(`/chat/sessions/${sessionId}`, { method: "DELETE" }),
   listChatMessages: (sessionId: string) =>
     request<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`),
+  getAgentRun: (runId: string) => request<AgentRun>(`/agent/runs/${runId}`),
   streamChat: async function* (
     body: ChatStreamRequest,
     onEvent?: (ev: ChatStreamEvent) => void
@@ -663,6 +724,21 @@ export const picardApi = {
     const q = qs.toString();
     return request<WorkflowRecord[]>(`/workflows${q ? `?${q}` : ""}`);
   },
+  createWorkflow: (body: {
+    workspace_id: string;
+    type: WorkflowType;
+    title: string;
+    flow_json: WorkflowRecord["flow_json"];
+    evidence_profile: WorkflowRecord["evidence_profile"];
+    profile?: WorkflowProfile;
+    practice_area?: string;
+    prompt_md?: string;
+  }) =>
+    request<WorkflowRecord>("/workflows", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getWorkflow: (id: string) => request<WorkflowRecord>(`/workflows/${id}`),
   validateWorkflow: (id: string) =>
     request<WorkflowValidation>(`/workflows/${id}/validate`, { method: "POST" }),

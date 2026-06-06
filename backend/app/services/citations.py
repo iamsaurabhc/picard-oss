@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from app.config import settings
 from app.prompts.legal_rag import contrastive_block, preamble_for_variant
 from app.schemas import ContextBundleOut, SearchHit
-from app.services.excerpt_selector import has_identity_signal, select_excerpts
+from app.services.excerpt_selector import (
+    has_identity_signal,
+    overview_facet_excerpt,
+    select_excerpts,
+)
 from app.services.query_understanding import SubQuestion
 
 MARKER_RE = re.compile(r"\[(\d+)\]")
@@ -61,6 +65,38 @@ def _fallback_excerpt(text: str, max_len: int) -> str:
     return cleaned[:max_len].rstrip() + "…"
 
 
+def _use_focus_for_intent(intent: str, *, prefer_listing: bool, page_level: bool) -> bool:
+    if page_level or (prefer_listing and settings.listing_disable_focus_excerpts):
+        return False
+    return settings.enable_focus_excerpts
+
+
+def format_sources_for_prompt(
+    citation_map: CitationMap,
+    *,
+    intent: str = "general",
+    excerpt_cap: int = 1200,
+    group_by_document: bool = False,
+    doc_names: dict[str, str] | None = None,
+) -> str:
+    """Format citation refs as a Sources block (optional per-document grouping)."""
+    lines: list[str] = []
+    if group_by_document:
+        by_doc: dict[str, list[CitationRef]] = {}
+        for ref in citation_map.refs:
+            by_doc.setdefault(ref.document_id, []).append(ref)
+        for doc_id, refs in by_doc.items():
+            label = (doc_names or {}).get(doc_id) or doc_id
+            lines.append(f"### Sources for: {label}")
+            for ref in refs:
+                lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
+            lines.append("")
+    else:
+        for ref in citation_map.refs:
+            lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
+    return "\n".join(lines).strip()
+
+
 def build_citation_map(
     hits: list[SearchHit],
     bundles: list[ContextBundleOut] | None = None,
@@ -71,6 +107,7 @@ def build_citation_map(
     sub_questions: list[SubQuestion] | None = None,
     prefer_amounts: bool = False,
     prefer_listing: bool = False,
+    page_level: bool = False,
     intent: str = "general",
     coverage_goal: str = "",
     db=None,
@@ -92,18 +129,51 @@ def build_citation_map(
         seen.add(hit.chunk_id)
         unique_hits.append(hit)
 
-    excerpts = select_excerpts(
-        unique_hits,
-        question=question,
-        sub_questions=sub_questions,
-        max_chars=excerpt_chars,
-        prefer_amounts=prefer_amounts,
-        prefer_listing=prefer_listing,
-        intent=intent,
-        coverage_goal=coverage_goal,
-        db=db,
-        workspace_id=workspace_id,
-    )
+    use_focus = _use_focus_for_intent(intent, prefer_listing=prefer_listing, page_level=page_level)
+    if page_level:
+        overview_focus = intent == "case_overview"
+        excerpts: dict[str, str] = {}
+        for h in unique_hits:
+            text = h.text_content or ""
+            prefer_amounts_here = prefer_amounts or overview_focus
+            focused = (
+                overview_facet_excerpt(
+                    text,
+                    excerpt_chars,
+                    question=question,
+                    sub_questions=sub_questions,
+                )
+                if overview_focus
+                else None
+            )
+            if focused:
+                excerpts[h.chunk_id] = focused
+            else:
+                excerpts[h.chunk_id] = select_excerpts(
+                    [h],
+                    question=question,
+                    sub_questions=sub_questions,
+                    max_chars=excerpt_chars,
+                    prefer_amounts=prefer_amounts_here,
+                    prefer_listing=prefer_listing,
+                    intent=intent,
+                    coverage_goal=coverage_goal,
+                    db=db,
+                    workspace_id=workspace_id,
+                ).get(h.chunk_id) or _fallback_excerpt(text, excerpt_chars)
+    else:
+        excerpts = select_excerpts(
+            unique_hits,
+            question=question,
+            sub_questions=sub_questions,
+            max_chars=excerpt_chars,
+            prefer_amounts=prefer_amounts,
+            prefer_listing=prefer_listing,
+            intent=intent,
+            coverage_goal=coverage_goal,
+            db=db,
+            workspace_id=workspace_id,
+        )
 
     for hit in unique_hits:
         bundle_id = None
@@ -113,7 +183,7 @@ def build_citation_map(
                     bundle_id = b.bundle_id
                     break
         preview = excerpts.get(hit.chunk_id) or _fallback_excerpt(hit.text_content or "", excerpt_chars)
-        if settings.enable_focus_excerpts and preview:
+        if use_focus and preview:
             parts = _SENTENCE_SPLIT_RE.split(preview.strip())
             pinpoint = (parts[0] if parts else preview)[:200]
         else:
@@ -180,6 +250,8 @@ def build_system_prompt(
     target_entity: str | None = None,
     sub_question_coverage: dict[str, str | None] | None = None,
     coverage_goal: str = "",
+    synthesis_mode: str = "chat",
+    agent_profile: str = "firm",
 ) -> str:
     if intent in {"case_overview", "entity_matter_listing"}:
         excerpt_cap = 1200 if intent == "entity_matter_listing" else 800
@@ -190,9 +262,54 @@ def build_system_prompt(
 
     entity_label = target_entity or "the named party"
     preamble = preamble_for_variant(settings.prompt_variant)
-    contrastive = contrastive_block(intent)
+    agent_deep = synthesis_mode == "agent"
+    court = agent_profile == "court"
+    contrastive = (
+        contrastive_block("agent_entity_matter_listing")
+        if agent_deep and intent == "entity_matter_listing"
+        else contrastive_block(intent)
+    )
 
-    if intent == "entity_matter_listing":
+    if intent == "entity_matter_listing" and agent_deep:
+        lines = [
+            preamble,
+            "",
+            contrastive,
+            "",
+            "You are a legal document assistant producing a multi-matter catalog for Agent mode.",
+            (
+                "Use neutral, procedural language only; do not predict outcomes or assess credibility."
+                if court
+                else "Include commercial and procedural detail when present in excerpts."
+            ),
+            f"The user asked for all cases/matters involving {entity_label}.",
+            "Answer ONLY using the provided source excerpts.",
+            "Structure:",
+            "## Summary",
+            f"One or two sentences: how many source documents mention {entity_label}, "
+            "forums involved, and date range if stated in excerpts.",
+            "",
+            "Then one markdown section per source document:",
+            "## [Document filename exactly as shown in Sources]",
+            "Write substantive prose paragraphs where helpful, plus bullets for:",
+            "- **Parties & role:** who is plaintiff/informant/respondent and role of the target party [N]",
+            "- **Forum / case no. / statute:** court, commission, case number, act sections — only from that document [N]",
+            "- **Key facts & allegations:** core claims, conduct, statutory provisions [N]",
+            "- **Dates & outcome / stage:** filing dates, orders, disposition, penalty — only if stated [N]",
+            "",
+            "Rules:",
+            "- Every factual claim MUST include inline [N] from that document's excerpts only.",
+            "- Do NOT use case_overview skeleton sections (Parties / Court & citation as top-level only).",
+            "- Do NOT write 'Sources do not specify [topic]' for a section when any excerpt in that "
+            "document mentions that topic (dates, forum, case number, allegations, outcome).",
+            "- Do NOT merge facts from different documents into one narrative.",
+            "- Use the document filename from Sources as each section heading.",
+            "- Omit sections for documents with no excerpts in Sources.",
+            "- Do not invent citation numbers.",
+            "",
+            "Sources:",
+        ]
+    elif intent == "entity_matter_listing":
         lines = [
             preamble,
             "",
@@ -208,10 +325,11 @@ def build_system_prompt(
             "Then one markdown section per source document:",
             "## [Document filename exactly as shown in Sources]",
             "- **Role of party:** defendant/respondent/opposite party — only if stated in that document's excerpts [N]",
-            "- **Other parties / counterparties:** list informants, complainants, and co-respondents named in that document [N]",
-            "- **Forum / statute:** court, commission, act sections — only from that document [N]",
-            "- **Key facts:** who filed against whom, core allegations, statutory provisions invoked, and conduct alleged [N]",
-            "- **Outcome / stage:** disposition, order, investigation stage, penalty — only if stated [N]",
+            "- **Other parties / counterparties:** informants, complainants, co-respondents [N]",
+            "- **Forum / statute / case id:** court, commission, case number, act sections [N]",
+            "- **Procedural posture:** filing stage, investigation, hearing, order type [N]",
+            "- **Key facts / allegations:** claims, statutory provisions, findings cited [N]",
+            "- **Outcome / reliefs:** disposition, penalty, next step — only if stated [N]",
             "",
             "Rules:",
             "- Every factual bullet MUST include an inline citation [N] from that same document only.",
@@ -244,10 +362,19 @@ def build_system_prompt(
             "Rules:",
             "- Every factual sentence or bullet MUST include an inline citation [N].",
             "- Distinguish roles clearly: claimant/plaintiff vs injured third party vs defendant/respondent.",
-            "- In Key facts, describe the central events and underlying incident BEFORE procedural history.",
-            "- In Damages / relief sought, state every monetary amount and relief explicitly mentioned in excerpts "
-            "(e.g. 'claimed damages in the sum of £1,000'). Never write 'Sources do not specify' if any excerpt "
-            "contains damages, relief, or sum language.",
+            "- In Parties, name litigating parties AND any injured or deceased person identified in excerpts "
+            "(e.g. plaintiff's infant son by name), with their role — not only the formal parties.",
+            "- In Key facts, describe the central events and underlying incident (including death or serious "
+            "injury when stated) BEFORE procedural history.",
+            "- In Court & citation, include the forum or commission (not only 'court'), and case or diary numbers "
+            "when stated in excerpts.",
+            "- In Damages / relief sought, state every monetary amount, prayed relief, penalty, direction, or "
+            "other remedy explicitly mentioned in excerpts (e.g. 'claimed damages in the sum of £1,000'). "
+            "Never write 'Sources do not specify' if any excerpt contains damages, relief, penalty, or sum language.",
+            "- In Dates & procedural history, include filing dates, relevant periods, and procedural milestones "
+            "when present in excerpts.",
+            "- In Outcome / holdings, state final orders or judgments when present; if only a procedural stage "
+            "is described (e.g. under investigation), state that stage with a citation.",
             "- State amounts, dates, and party names ONLY when present in cited excerpts — never invent.",
             "- Do NOT write 'various legal precedents' without naming them from a cited source.",
             "- If a section lacks evidence, write: 'Sources do not specify [topic].'",
@@ -408,17 +535,22 @@ def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int
     return "\n\n".join(parts), reassigned
 
 
+_MARKDOWN_STRUCTURE_INTENTS = frozenset({"entity_matter_listing", "case_overview"})
+
+
 def validate_response(
     answer: str,
     citation_map: CitationMap,
     *,
     mode: str = "SIMPLE",
     allow_partial_disclosure: bool = False,
+    intent: str | None = None,
 ) -> tuple[str, CitationValidation]:
     valid_indices = {r.index for r in citation_map.refs}
     stripped = 0
     reassigned = 0
     cross_bundle = False
+    preserve_structure = intent in _MARKDOWN_STRUCTURE_INTENTS
 
     def _replace_invalid(match: re.Match) -> str:
         nonlocal stripped
@@ -429,9 +561,12 @@ def validate_response(
         return ""
 
     cleaned = MARKER_RE.sub(_replace_invalid, answer)
-    cleaned, fact_stripped = _fact_verify_and_strip(cleaned, citation_map)
-    stripped += fact_stripped
-    cleaned, reassigned = _reassign_markers(cleaned, citation_map)
+    if preserve_structure:
+        pass
+    else:
+        cleaned, fact_stripped = _fact_verify_and_strip(cleaned, citation_map)
+        stripped += fact_stripped
+        cleaned, reassigned = _reassign_markers(cleaned, citation_map)
 
     if mode == "MULTI_CONSTRAINT" and not allow_partial_disclosure and len(citation_map.bundle_chunk_ids) > 1:
         cited_indices = {int(m.group(1)) for m in MARKER_RE.finditer(cleaned)}

@@ -184,12 +184,28 @@ class ChatStreamRequest(BaseModel):
     session_id: str
     workspace_id: str
     message: str = Field(min_length=1)
+    mode: Literal["rag", "agent"] = "rag"
     document_ids: list[str] | None = None
     retrieval_mode: Literal["auto", "simple", "multi_constraint"] = "auto"
     allow_partial_disclosure: bool = False
     top_k: int = 12
     tabular_review_id: str | None = None
     workflow_id: str | None = None
+    agent_run_id: str | None = None
+    approval_token: str | None = None
+
+
+class AgentRunOut(BaseModel):
+    id: str
+    session_id: str | None
+    workspace_id: str
+    profile: str
+    mode: str
+    plan_json: dict | None = None
+    events: list[dict] = Field(default_factory=list)
+    status: str
+    created_at: str
+    updated_at: str
 
 
 ColumnFormat = Literal[

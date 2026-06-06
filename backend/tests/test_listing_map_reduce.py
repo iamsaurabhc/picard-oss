@@ -26,10 +26,11 @@ def _hit(doc_id: str, text: str, page: int = 1) -> SearchHit:
     )
 
 
-def test_should_use_map_reduce_requires_two_docs():
+def test_should_use_map_reduce_requires_four_docs():
     assert not should_use_listing_map_reduce(["d1"])
-    assert should_use_listing_map_reduce(["d1", "d2"])
-    assert not should_use_listing_map_reduce(["d1", "d2"], enabled=False)
+    assert not should_use_listing_map_reduce(["d1", "d2", "d3"])
+    assert should_use_listing_map_reduce(["d1", "d2", "d3", "d4"])
+    assert not should_use_listing_map_reduce(["d1", "d2", "d3", "d4"], enabled=False)
 
 
 def test_merge_listing_briefs_renumbers_citations():
@@ -66,6 +67,27 @@ def test_reduce_prompt_includes_total_and_contrastive():
     assert "Brief for: A.pdf" in prompt
 
 
+def test_reduce_prompt_includes_sources_when_citation_map_provided():
+    cmap = build_citation_map(
+        [_hit("d1", "Google LLC is opposite party in Case No. 30/2012.")],
+        doc_names={"d1": "A.pdf"},
+        page_level=True,
+        prefer_listing=True,
+        intent="entity_matter_listing",
+    )
+    prompt = build_listing_reduce_prompt(
+        [("A.pdf", "- **Role:** respondent [1]")],
+        target_entity="google llc",
+        total_discovered=1,
+        shown_count=1,
+        citation_map=cmap,
+        doc_names={"d1": "A.pdf"},
+    )
+    assert "Per-document sources" in prompt
+    assert "Case No. 30" in prompt or "opposite party" in prompt
+    assert "supported by per-document sources" in prompt.casefold()
+
+
 @patch("app.services.listing_map_reduce.completion")
 @patch("app.services.listing_map_reduce.build_document_context")
 @patch("app.services.listing_map_reduce.retrieve_hits_for_listing_document")
@@ -75,7 +97,7 @@ def test_map_document_produces_brief(mock_retrieve, mock_doc_ctx, mock_completio
     from app.services.query_understanding import QueryUnderstanding, TargetEntity
 
     mock_completion.return_value = "- **Role of party:** respondent [1]"
-    mock_retrieve.return_value = [_hit("d1", "Google LLC is the opposite party.")]
+    mock_retrieve.return_value = ([_hit("d1", "Google LLC is the opposite party.")], {})
     ctx = MagicMock()
     ctx.to_prompt_block.return_value = ""
     mock_doc_ctx.return_value = ctx

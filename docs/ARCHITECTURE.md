@@ -10,7 +10,7 @@ This document is the authoritative blueprint for **picard-oss**: an open-source,
 
 **What picard-oss deliberately is not:** a fork of LegalDocX's Neo4j GraphRAG stack, Supabase SaaS control plane, or Mike's cloud deployment model. picard-oss trades graph complexity and managed infra for **SQLite + FTS5 + local filesystem** — optimized for a single machine, zero cloud dependency, and fast time-to-first-query.
 
-**Document status (Jun 2026):** Phases **0–4** and **5a** (desktop, CI, release, settings) are **shipped**. Phases **5b–10** are **planned** — especially the **agentic era** (Citation Kernel §7.6, full Tool Registry §4.2.10, HITL §4.3, workflow library + LightFlow execution, LightAgent + mem0 authoring, composite playbooks §10.8, templates, connectors). Sections marked *planned* describe target behavior, not necessarily current code.
+**Document status (Jun 2026):** Phases **0–6** and **7.0** (Citation Kernel) are **shipped**. **Phase 7a–7b** (Agent + mem0, LightFlow) and Phases **8–10** are **planned** (templates/CSV, connectors, MCP export). Sections marked *planned* for Phase 7a+ describe target behavior until implemented.
 
 ---
 
@@ -21,10 +21,12 @@ This document is the authoritative blueprint for **picard-oss**: an open-source,
 2. [Core philosophy & differentiators](#2-core-philosophy--differentiators)
    - [2.5 Deployment profiles (firm / court)](#25-deployment-profiles-firm--court)
    - [2.6 Four surfaces, one evidence contract](#26-four-surfaces-one-evidence-contract)
+     - [2.6.1 Memory layers](#261-memory-layers)
 3. [Design decisions & rationale](#3-design-decisions--rationale)
 4. [Technology stack](#4-technology-stack)
    - [4.1 Tiered model routing (optional SLM orchestration)](#41-tiered-model-routing-optional-slm-orchestration)
-   - [4.2 Assistant modes & tool stack (post-v1)](#42-assistant-modes--tool-stack-post-v1)
+   - [4.2 Assistant modes & tool stack (Phase 7+)](#42-assistant-modes--tool-stack-phase-7)
+     - [4.2.11 System memory (PicardMemory + mem0, Phase 7a)](#4211-system-memory-picardmemory--mem0-phase-7a)
      - [4.2.5 LightFlow execution (Phase 7b)](#425-lightflow-execution-phase-7b)
      - [4.2.6 Step agent role catalog](#426-step-agent-role-catalog)
      - [4.2.8 Explicitly rejected](#428-explicitly-rejected)
@@ -37,8 +39,8 @@ This document is the authoritative blueprint for **picard-oss**: an open-source,
 6. [Data model (SQLite)](#6-data-model-sqlite)
    - [6.3 Post-v1 tables (workflows, agent, connectors)](#63-post-v1-tables-workflows-drafts-csv-web-snapshots)
 7. [Evidence contract (adapted from Picard.law)](#7-evidence-contract-adapted-from-picardlaw)
-   - [7.4 Multi-tier evidence (post-v1)](#74-multi-tier-evidence-post-v1)
-   - [7.5 Per-step refuse in Agent mode (post-v1)](#75-per-step-refuse-in-agent-mode-post-v1)
+   - [7.4 Multi-tier evidence (Phase 7+)](#74-multi-tier-evidence-phase-7)
+   - [7.5 Per-step refuse in Agent mode (Phase 7+)](#75-per-step-refuse-in-agent-mode-phase-7)
    - [7.6 Citation Kernel (agentic baseline)](#76-citation-kernel-agentic-baseline)
 8. [Ingestion pipeline](#8-ingestion-pipeline)
    - [8.3 Entity extraction at ingest (CARP foundation)](#83-entity-extraction-at-ingest-carp-foundation)
@@ -53,7 +55,7 @@ This document is the authoritative blueprint for **picard-oss**: an open-source,
    - [10.7 Workflow execution (LightFlow, Phase 7b)](#107-workflow-execution-lightflow-phase-7b)
    - [10.8 Composite use-case playbooks](#108-composite-use-case-playbooks)
 11. [Structured tabular review (adapted from Mike)](#11-structured-tabular-review-adapted-from-mike)
-   - [11.5 Workflow library (Phase 6+)](#115-workflow-library-phase-6)
+   - [11.5 Workflow library (Phase 6, shipped)](#115-workflow-library-phase-6-shipped)
    - [11.6 LightFlow workflow model](#116-lightflow-workflow-model)
 12. [Frontend architecture](#12-frontend-architecture)
    - [12.6 Assistant modes UX (Chat vs Agent)](#126-assistant-modes-ux-chat-vs-agent)
@@ -66,7 +68,7 @@ This document is the authoritative blueprint for **picard-oss**: an open-source,
   - [15.3.1 CI gates (shipped)](#1531-ci-gates-shipped)
   - [15.4 Automated tests](#154-automated-tests)
   - [15.5 Manual legal review (Tier C)](#155-manual-legal-review-tier-c)
-16. [Future extensions (post-v1)](#16-future-extensions-post-v1)
+16. [Future extensions (Phase 7+)](#16-future-extensions-phase-7)
 
 ---
 
@@ -123,9 +125,11 @@ Legal professionals need AI assistance that:
 
 ### Post-v1 success criteria (Phases 6–10)
 
+Phase **6** gates (WF-*) are **shipped** with the workflow library. Rows below for Phase **7+** remain acceptance targets until those phases land.
+
 | Criterion | Measure | Phase |
 | --------- | ------- | ----- |
-| Workflow intent routing | Selecting a playbook triggers correct CARP/FTS5 intent (WF-01) | 6 |
+| Workflow intent routing | Selecting a playbook triggers correct CARP/FTS5 intent (WF-01) | 6 — shipped |
 | Deterministic workflow run | Same approved DAG + input → same step order (LF-01, US-08) | 7b |
 | Agent citation integrity | Multi-step agent answers: 100% corpus claims use valid `[N]` (AG-01, CK-02) | 7a |
 | Per-step refuse | Empty retrieval → `step_refused` or LightFlow stop (AG-02, LF-03, CK-01) | 7a/7b |
@@ -217,7 +221,7 @@ Picard supports two **deployment profiles** (settings: `agent_profile`, default 
 | Profile | Default | Connectors | Agent guardrails |
 |---------|---------|------------|------------------|
 | **`firm`** | Yes | MCP, email, cloud ingest when user enables | Standard HITL on exports |
-| **`court`** | Registry / judicial admin | Off by default; local vault only unless approved | Tool denylist (no risk scoring, outcome prediction, credibility scoring); mandatory disclosure on exports; mem0 retention cap |
+| **`court`** | Registry / judicial admin | Off by default; local vault only unless approved | Tool denylist (no risk scoring, outcome prediction, credibility scoring); mandatory disclosure on exports; **mem0 retention cap** (`MEM0_MAX_ENTRIES`, §4.2.11); stricter `memory_store_allowed`; optional HITL before store |
 
 **Regulatory alignment (India, draft 2026):** The Supreme Court's draft *Regulations for Use of AI in Courts, 2026* emphasizes **human primacy**, advisory AI, explainability, purpose limitation, and absolute prohibitions on algorithmic adjudication and risk scoring (Reg 19–20). Picard's **court** profile maps to permissible uses (legal research, citation verification, summarisation, admin assistance, conversational helpers with oversight) and blocks prohibited patterns in the tool registry. **Firm** profile targets private-matter work with the same evidence contract but fewer export restrictions.
 
@@ -229,10 +233,23 @@ Picard is not generic "chat with tools." Four user surfaces share one contract (
 |---------|---------|----------|--------|----------------|
 | **Chat (RAG)** | Phase 3 | Fast grounded Q&A | RAG DAG in `chat.py` | `[N]` → bbox on PDF via Citation Kernel |
 | **Tabular** | Phase 4 | Bulk extract across documents | FTS + cell LLM | Cell markers → PDF (Tier B) |
-| **Agent (author + ad-hoc Q&A)** | Phase 7a *planned* | Describe goal, upload scope, cited Q&A | LightAgent + mem0 + **same Citation Kernel as Chat** | Per-tool `[N]` maps; optional `flow_json` draft |
-| **Workflow run** | Phase 7b *planned* | Execute approved playbook deterministically | **LightFlow** (v0.8+) | Per-step Citation Kernel outputs + merged `[N]` / `[ext:N]` maps |
+| **Workflow library** | Phase 6 | Browse, validate, export playbooks; seed tabular | SQLite `workflows` + builtins | `flow_json` DAG spec; **Run** awaits 7b |
+| **Agent (author + ad-hoc Q&A)** | Phase 7a *planned* | Describe goal, upload scope, cited Q&A | LightAgent + mem0 (§4.2.11) + **same Citation Kernel as Chat** | Per-tool `[N]` maps; optional `flow_json` draft |
+| **Workflow run** | Phase 7b *planned* | Execute approved playbook deterministically | **LightFlow** (v0.8+) — **no mem0** | Per-step Citation Kernel outputs + merged `[N]` / `[ext:N]` maps |
 
-**Chat mode** keeps a **deterministic retrieval DAG** and single-turn LLM context (session history is UI-only). **Agent mode** authors workflows and handles exploratory multi-tool chat — but **corpus Q&A uses the identical Citation Kernel** as Chat (§7.6); agent adds orchestration (upload, scope, multi-step), not a weaker RAG path. **Workflow run** executes saved `flow_json` via `LightFlow.run(trace=True)` — same step order on every re-run. Listing map-reduce (§10.6) informed the DAG shape but is not the execution engine (§4.2.5).
+**Chat mode** keeps a **deterministic retrieval DAG** and single-turn LLM context (session history is UI-only — see §2.6.1). **Agent mode** authors workflows and handles exploratory multi-tool chat — but **corpus Q&A uses the identical Citation Kernel** as Chat (§7.6); agent adds orchestration (upload, scope, multi-step, **system memory**), not a weaker RAG path. **Workflow run** executes saved `flow_json` via `LightFlow.run(trace=True)` — same step order on every re-run. Listing map-reduce (§10.6) informed the DAG shape but is not the execution engine (§4.2.5).
+
+#### 2.6.1 Memory layers
+
+Do not conflate three persistence layers:
+
+| Layer | Storage | Fed to Chat/Agent LLM? | Phase |
+|-------|---------|------------------------|-------|
+| **Settings** | `config/settings.json` + secrets | Via `config.py` only | 5a shipped |
+| **Session history** | `chat_sessions` / `chat_messages` | **Chat: no** — UI transcript only; synthesis uses current turn | 3 shipped |
+| **System memory (learned)** | `MEM0_DATA_DIR` (mem0 vectors) | **Agent mode only** (§4.2.11) | 7a planned |
+
+**LightFlow runs (7b)** do not read or write mem0 — personalization is frozen in approved `flow_json` + run input (LF-01).
 
 ---
 
@@ -249,11 +266,11 @@ Picard is not generic "chat with tools." Four user surfaces share one contract (
 | LLM routing       | litellm + optional tiered roles            | One interface; SLM/LLM split when configured           | Hard-coded OpenAI SDK; mandatory OpenRouter              |
 | Tabular UI        | Custom table + Shadcn (Mike-inspired)      | Full control, monotone styling                         | Ag-Grid (heavier, license considerations)                 |
 | DOCX support      | PDF-only v1; markdown drafts Phase 8       | Simpler viewer pipeline                                | Mike's DOCX + tracked changes (post-v1)                  |
-| Workflows library | Phase 6 — evidence-aware local playbooks   | Binds to CARP intents; ~20 built-ins, profile-tagged | Mike builtinWorkflows clone |
+| Workflows library | Phase 6 — **shipped** — evidence-aware local playbooks | Binds to CARP intents; ~20 built-ins, profile-tagged | Mike builtinWorkflows clone |
 | Agent orchestration | **LightAgent + mem0** (7a author); **LightFlow** (7b run); Chat = frozen RAG DAG | Picard tools wrap CARP/FTS; refuse per step (§7.5) | LangGraph; custom `workflow_runner.py` |
 | Distribution | Tauri + Docker + GHCR (Phase 5a, shipped) | Native installers, updater, `requirements-core` split | Web-only |
 | Pipeline prompts | `prompt_registry.json` overrides (shipped) | Tune pipeline without code | Hard-coded only |
-| Long-term memory | mem0 local store (Phase 7a) | Flow patterns — not legal conclusions | Vector memory as corpus substitute |
+| Long-term memory | mem0 local store (Phase 7a, §4.2.11) | Flow patterns — not legal conclusions | Vector memory as corpus substitute |
 | Structured extraction | Pydantic + litellm JSON; Instructor optional | Already Pydantic-native FastAPI stack | LangChain `.with_structured_output()` |
 | CSV ingest        | stdlib `csv` → SQLite (Phase 8)            | No dataframe memory spike                              | pandas, polars |
 | Templates         | Jinja2 sandbox (Phase 8)                   | Local file templates with provenance-bound fill        | Mike free-form `generate_docx` |
@@ -463,9 +480,9 @@ SLM savings are modest per query but compound at volume. The bigger win is **lat
 
 ---
 
-### 4.2 Assistant modes & tool stack (post-v1)
+### 4.2 Assistant modes & tool stack (Phase 7+)
 
-Phases 6–10 add workflows and **Agent mode** without replacing the shipped **Chat (RAG)** path. Picard's dominant RAM cost is **GLiNER/torch** at ingest (§8.3); the **agent pack** (`lightagent`, `mem0ai`) is optional — lazy-loaded and omitted from `requirements-core.txt` used by default desktop builds.
+Phase **6** (workflow library + `flow_json` schema) is **shipped**. Phases **7–10** add Citation Kernel extraction, **Agent mode** + mem0, LightFlow execution, templates/CSV, and connectors — without replacing the shipped **Chat (RAG)** path. Picard's dominant RAM cost is **GLiNER/torch** at ingest (§8.3); the **agent pack** (`lightagent`, `mem0ai`) is optional — lazy-loaded and omitted from `requirements-core.txt` used by default desktop builds.
 
 #### 4.2.0 Four orchestration paths
 
@@ -555,6 +572,7 @@ async def stream_agent_run(request, session):
         if event.needs_approval:
             yield sse("approval_required", event.plan)
         ...
+    picard_memory.store(sanitized_run_summary, user_id=...)  # §4.2.11 — after filter
 ```
 
 - **Tool adapters:** Python callables registered with LightAgent; each wraps existing services (`planned_retrieve`, CARP, tabular reads). **No** raw "read entire document" into context.
@@ -564,7 +582,46 @@ async def stream_agent_run(request, session):
 
 **Authoring tools (7a):** `propose_flow` (draft `flow_json` from workspace inventory), `save_flow`, `validate_flow`, `list_workflows`, `read_workflow`. Output is a **DAG spec** (§11.6), not a one-shot answer.
 
-**mem0:** Recalls prior flow patterns (`user_id = "{workspace_id}:{profile}"`) — preferences and workflow shapes, not legal conclusions.
+**System memory:** Full store/retrieve policy in [§4.2.11](#4211-system-memory-picardmemory--mem0-phase-7a). Summary: mem0 recalls procedural patterns only — not legal conclusions.
+
+#### 4.2.11 System memory (PicardMemory + mem0, Phase 7a)
+
+Long-term **system memory** learns how a firm/workspace prefers to work. It does **not** store corpus facts (those stay in SQLite + PDFs under the evidence contract).
+
+**Reference pattern:** LightAgent accepts a `CustomMemory` adapter with `store(data, user_id)` and `retrieve(query, user_id)` delegating to [mem0](https://github.com/mem0ai/mem0) `add` / `search`. Picard implements the same interface in `backend/app/services/agent_memory.py` as **`PicardMemory`**.
+
+| Topic | Picard choice |
+| ----- | ------------- |
+| **Module** | `agent_memory.py` — `PicardMemory` class |
+| **`mem0_user_id`** | `f"{workspace_id}:{agent_profile}"` — v1 single-user local; workspace = matter/firm boundary |
+| **Storage path** | `MEM0_DATA_DIR` (default `${PICARD_DATA_DIR}/mem0`) — **local embedded vector store**; no external Qdrant server in v1 |
+| **LLM keys for mem0** | From [`secrets_store.py`](../backend/app/services/secrets_store.py) + settings — **never** hardcoded `OPENAI_API_KEY` in `PicardMemory.__init__` |
+| **Retrieve** | Before `agent.run`: `retrieve(query, user_id)` → SSE `memory_hit` → inject into agent context (§5.2.1, `MemoryHitChip` §12.6) |
+| **Store** | After agent run (when `MEM0_STORE_ON_RUN_END=true`): **sanitized** summary via `memory_store_allowed()`; optional user “remember this process” with court HITL |
+| **`self_learning`** | LightAgent `self_learning=False` by default — Picard controls what is stored, not raw transcript auto-ingest |
+| **Promotion** | Taught procedures → `propose_flow` → HITL-PLAN → `workflows` row (`source=agent_authored`); mem0 recalls habits, SQLite holds approved `flow_json` for 7b runs |
+
+**Allowed in mem0 (examples):**
+
+- User-stated approval / review chains (e.g. internal sign-off order before a workflow step)
+- Preferred `flow_json` shapes (roles, `depends_on`, typical step order)
+- Default document scope habits, tabular column presets, export preferences
+
+**Rejected at `store()` (`memory_store_allowed`):**
+
+- Inline `[N]` markers, chunk IDs, or assistant answer text with corpus citations
+- Extracted entity values from vault (“Party X”, case-specific amounts)
+- Tier C web snapshot text (`[ext:N]` sources)
+
+Optional audit: `memory_sync_log` row per add (§6.3). Vectors on disk under `~/.picard-data/mem0/` (local-first §2.1).
+
+**Teach-then-recall golden (AG-04):**
+
+1. **Session A (Agent):** User teaches a procedural preference (e.g. multi-step internal review order for DD).
+2. **Session B (Agent):** User asks a related goal (“How do we run DD on these NDAs?”) — `memory_hit` is non-empty; `propose_flow` or plan quality improves vs cold start.
+3. **Negative test:** Synthesized answer containing `[1]` legal claims is **not** stored.
+
+**Consumers (§2.6.1):** Agent mode only. Chat RAG does **not** call mem0. LightFlow runs (7b) do **not** read or write mem0.
 
 #### 4.2.3 Structured extraction (tabular + drafts)
 
@@ -663,6 +720,7 @@ Each `LightFlowStepDef.role` maps to a pre-configured `LightAgent` with a fixed 
 | Playwright / Crawl4AI (default) | Browser RAM; document as Phase 9 limitation |
 | pandas / polars (default CSV) | Unnecessary memory for typical legal CSVs |
 | duckduckgo-search / search APIs | User decision: URL-only fetch (Phase 9) |
+| External Qdrant as default mem0 backend | Conflicts with local-first; use `MEM0_DATA_DIR` embedded store (§4.2.11) |
 
 #### 4.2.9 LightAgent upstream constraints
 
@@ -855,10 +913,11 @@ Three clients share one backend (loopback in desktop; configurable in dev):
 │  backend/  FastAPI (shipped)                                              │
 │  ├── /documents, /parse, /search, /chat/stream, /tabular                 │
 │  ├── /settings, /prompts, /updates (Phase 5a)                            │
-│  ├── /workflows, /agent/runs (Phase 6–7 planned)                          │
-│  ├── /connectors, /compliance/* (Phase 9 planned)                         │
-│  └── Services: chat, citations, listing_map_reduce, tabular, model_router │
-│      Planned: lightagent_runtime, picard_flow_runner, flow_agent_factory, tools/ │
+│  ├── /workflows (Phase 6 shipped); /workflows/{id}/run (Phase 7b planned) │
+│  ├── /agent/runs (Phase 7a planned); /connectors, /compliance/* (Phase 9)   │
+│  └── Services: chat, citations, listing_map_reduce, tabular, model_router   │
+│      Shipped: citation_kernel.py (7.0)                                      │
+│      Planned: lightagent_runtime, agent_memory, picard_flow_runner, tools/  │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 ▼
    SQLite + FTS5 | ~/.picard-data/pdfs | prompt_overrides.json | mem0/ (Ph 7)
@@ -1190,10 +1249,10 @@ CREATE TABLE jobs (
 
 ### 6.3 Post-v1 tables (workflows, agent, connectors, drafts)
 
-Added in Phases 6–10 (*planned* unless noted). All local SQLite — no cloud sharing tables.
+**Shipped (Phase 6):** `workflows`, `hidden_workflows`. **Planned (Phases 7–10):** `workflow_runs`, `agent_runs`, `memory_sync_log`, CSV/draft/connector tables below. All local SQLite — no cloud sharing tables.
 
 ```sql
--- Workflow library (Phase 6)
+-- Workflow library (Phase 6 — shipped)
 CREATE TABLE workflows (
   id TEXT PRIMARY KEY,
   workspace_id TEXT,              -- NULL = global built-in
@@ -1396,7 +1455,7 @@ interface ChatResponse {
 }
 ```
 
-### 7.4 Multi-tier evidence (post-v1)
+### 7.4 Multi-tier evidence (Phase 7+)
 
 Phases 7–9 extend the three-layer pipeline with **evidence tiers**. Each tier has its own citation namespace — never silently blended.
 
@@ -1432,7 +1491,7 @@ flowchart LR
 | **C** | User-supplied URL snapshots | `[ext:N]` → URL + `fetched_at` | Disabled unless `ENABLE_WEB_RESEARCH=true`; distinct UI styling |
 | **D** | Template-filled drafts | Section `sources[]` + `missing_evidence[]` | Outputs carry `draft: true`; not final legal documents |
 
-### 7.5 Per-step refuse (Agent + LightFlow, post-v1)
+### 7.5 Per-step refuse (Agent + LightFlow, Phase 7+)
 
 Phase 3 refuse gate (Layer 2) applies at **conversation start** for single-shot **Chat** mode.
 
@@ -1454,7 +1513,7 @@ Phase 3 refuse gate (Layer 2) applies at **conversation start** for single-shot 
 
 ### 7.6 Citation Kernel (agentic baseline)
 
-The **Citation Kernel** is the single mandatory path for all Tier A corpus operations in Chat, Agent, and LightFlow. Phase 7.0 extracts it from [`chat.py`](../backend/app/services/chat.py) into `citation_kernel.py`; until then, `chat.py` *is* the reference implementation.
+**Status: Phase 7.0 — shipped.** The **Citation Kernel** is the single mandatory path for all Tier A corpus operations in Chat, Agent, and LightFlow. [`citation_kernel.py`](../backend/app/services/citation_kernel.py) owns refuse → map → synthesize → validate → judge; [`chat.py`](../backend/app/services/chat.py) delegates post-retrieval synthesis to the kernel. **No mem0** — memory is orthogonal (§4.2.11).
 
 **Design invariant:** No corpus fact may reach an LLM without a pre-assigned `CitationMap`. LightAgent never receives raw full-document text from ad-hoc reads.
 
@@ -1528,7 +1587,7 @@ async def run_corpus_evidence_step(
 - Raw full-document read into LLM context
 - Corpus answers without pre-assigned citation map
 - Mixing Tier C `[ext:N]` into Tier A `[N]` bbox citations (WEB-01)
-- Storing legal conclusions in mem0 (§2.6, §4.2.2)
+- Storing legal conclusions in mem0 (§2.6.1, §4.2.11)
 
 **Kernel file list** (shared with Chat):
 
@@ -2117,7 +2176,8 @@ For queries like *"list all cases against Google LLC"* across many PDFs in a wor
 
 | Mode | Request | Backend path | Shipped |
 |------|---------|--------------|---------|
-| **Chat (RAG)** | `POST /chat/stream` (default) | `stream_chat()` — §5.2 | Yes |
+| **Chat (RAG)** | `POST /chat/stream` (default) | `stream_chat()` — §5.2 | Yes (Phase 3) |
+| **Workflow library** | `GET/POST /workflows`, validate | SQLite + builtins — §11.5 | Yes (Phase 6) |
 | **Agent (author)** | `POST /chat/stream` + `mode=agent` | `lightagent_runtime.stream_run()` — §5.2.1 | Phase 7a |
 | **Workflow run** | `POST /workflows/{id}/run` | `picard_flow_runner.run()` — §10.7 | Phase 7b |
 
@@ -2179,13 +2239,18 @@ Sources:
 
 ### 10.5 Agent mode — authoring (LightAgent + mem0, Phase 7a)
 
-When `ENABLE_AGENT_MODE=true` and `mode=agent`, `POST /chat/stream` delegates to **LightAgent** with **mem0** ([§4.2.2](#422-agent-authoring-pattern-phase-7a)). Chat mode (`mode=rag`) always uses `stream_chat()` regardless of the flag. **Workflow execution does not use Agent mode** — use §10.7.
+When `ENABLE_AGENT_MODE=true` and `mode=agent`, `POST /chat/stream` delegates to **LightAgent** with **mem0** ([§4.2.2](#422-agent-authoring-pattern-phase-7a), [§4.2.11](#4211-system-memory-picardmemory--mem0-phase-7a)). Chat mode (`mode=rag`) always uses `stream_chat()` regardless of the flag. **Workflow execution does not use Agent mode** — use §10.7.
 
 | Concern | Design |
 |---------|--------|
 | Orchestration | LightAgent exploratory loop; max `AGENT_MAX_ITERATIONS` |
-| Corpus Q&A | `answer_from_corpus` → **same Citation Kernel as Chat** (§7.6); not a separate RAG path |
-| Memory | mem0 via `PicardMemory`; stores flow patterns — **not** legal conclusions (§2.6) |
+| Corpus Q&A | **Kernel-first:** `stream_agent_run` → `stream_chat(..., mode=agent)` — same retrieval + `stream_corpus_evidence_step` as Chat (§7.6); one cited answer per turn |
+| Orchestration | LightAgent tool loop **not** used for standard vault Q&A; tools remain for workflow/HITL adapters |
+| Agent retrieval | `agent_retrieval_policy.py` (breadth × `firm`/`court`) + `retrieve_for_agent`; scoped `document_ids` seeded in listing discovery |
+| Citations invariant | Tier A: inline `[N]` + `references` SSE before `done`; no post-tool paraphrase |
+| Memory | mem0 via `PicardMemory` (§4.2.11); procedural patterns only — **not** legal conclusions |
+| Memory scope | **Agent mode only** — Chat RAG never calls mem0 (§2.6.1) |
+| Suggestions | `propose_flow`, workflow library ranking (optional mem0 retrieve in UI) |
 | Profile | `agent_profile=firm\|court` filters tool registration (§4.2.10) |
 | HITL | HITL-SCOPE / HITL-URL / HITL-PLAN (§4.3) |
 | Output | `flow_json` draft + ad-hoc cited answers; **no** `LightFlow.run` in 7a |
@@ -2196,7 +2261,7 @@ When `ENABLE_AGENT_MODE=true` and `mode=agent`, `POST /chat/stream` delegates to
 
 **Dynamic authoring:** User describes goal → Agent inspects workspace → emits `flow_json` (§11.6) → `FlowDAGPanel` preview → **HITL-PLAN** → `workflows` row with `source=agent_authored`. **Run** is a separate UI action (§10.7).
 
-**Built-in playbooks:** Stored as `flow_json` LightFlow graphs in Phase 6+ (§11.5), not prompt-only strings.
+**Built-in playbooks:** Stored as `flow_json` LightFlow graphs (Phase 6 shipped, §11.5), not prompt-only strings.
 
 Court profile **denylist:** risk scoring, outcome prediction, credibility scoring, surveillance tools.
 
@@ -2213,6 +2278,8 @@ Court profile **denylist:** risk scoring, outcome prediction, credibility scorin
 **Entry:** `POST /workflows/{id}/run` after user approval (`requires_approval` for court). Body supplies run input per `input_schema_json` (doc scope, template id, CSV file id, `urls[]`, etc.).
 
 **Backend:** `picard_flow_runner.py` loads `flow_json`, builds `LightFlow` via `flow_agent_factory.py`, runs `flow.run(..., trace=True, result_format="dict")`, persists trace + result to `workflow_runs` (§6.3).
+
+**Invariant:** `picard_flow_runner` does **not** read or write mem0. Same approved `flow_json` + input → same step order (LF-01).
 
 **SSE events (trace-mapped):**
 
@@ -2410,7 +2477,7 @@ For each (document × column):
 
 Dedicated chat panel inside review (`TRChatPanel`) with citations that scroll to table cells — adopt Mike's `TRCitationAnnotation` pattern in Phase 4. Enhanced in Phase 7 with agent tools (`read_tabular_cells`) for cross-table Q&A.
 
-### 11.5 Workflow library (Phase 6+)
+### 11.5 Workflow library (Phase 6, shipped)
 
 **Mike reference:** dual workflow types in [`builtinWorkflows.ts`](../mike/frontend/src/app/components/workflows/builtinWorkflows.ts) — `assistant` (`prompt_md`) and `tabular` (`columns_config`). Workflows attach to chat messages and seed tabular review columns on creation ([`PRODUCT-STRENGTHS.md`](../mike/docs/PRODUCT-STRENGTHS.md) §4).
 
@@ -2548,13 +2615,15 @@ type PicardAgentRole =
 
 **Shipped (Chat mode):** [`chat/page.tsx`](../frontend/app/(app)/chat/page.tsx) — `RetrievalActivityPanel`, `MarkdownWithCitations`, `MultiHighlightPDFViewer`, session sidebar, `PromptEditorDrawer`, document scope picker.
 
+**Shipped (Phase 6 — workflow library):** [`WorkflowLibrary`](../frontend/components/workflows/WorkflowLibrary.tsx), read-only [`FlowDAGPanel`](../frontend/components/workflows/FlowDAGPanel.tsx) on `/workspaces/[id]/workflows`.
+
 **Planned — Agent authoring (7a):**
 
 | Zone | Component | Behavior |
 |------|-----------|----------|
 | Header | `ModeToggle` | Chat ↔ Agent; profile badge (firm/court) |
 | Thread | `MemoryHitChip` | mem0 recall before plan |
-| Center | `AgentPlanPanel` / `FlowDAGPanel` | Edit `flow_json`; **Save workflow** (not execute) |
+| Center | `AgentPlanPanel` / `FlowDAGPanel` | Edit `flow_json` (7a extends Phase 6 read-only panel); **Save workflow** (not execute) |
 | Right | `ToolTimeline` + PDF | Exploratory tool steps; `[N]` citations |
 | Footer | `ConnectorStrip` | Phase 9 sources |
 | HITL | `ScopeConfirmBar` | HITL-SCOPE — confirm document/workspace scope |
@@ -2564,8 +2633,6 @@ type PicardAgentRole =
 
 | Component | Phase | Role |
 |-----------|-------|------|
-| `WorkflowLibrary` | 6 | List; **Run** vs **Edit in Agent** |
-| `FlowDAGPanel` | 6–7a | Read-only / edit DAG deps |
 | `FlowRunDialog` | 7b | Collect run input (`input_schema_json`) |
 | `FlowRunTimeline` | 7b | LightFlow trace (`step_start` / `step_end`) |
 | `WorkflowApprovalBar` | 7b | Court pre-run approval |
@@ -2633,12 +2700,12 @@ type PicardAgentRole =
 | GET | `/agent/runs/{id}` | Agent run + `events_json` |
 
 
-### Workflows (Phase 6+)
+### Workflows (Phase 6 shipped; run Phase 7b)
 
 
 | Method | Path | Description |
 | ------ | ---- | ----------- |
-| GET | `/workflows` | List built-ins + custom (filter by practice area, type) |
+| GET | `/workflows` | List built-ins + custom (filter by practice area, type) — **shipped** |
 | POST | `/workflows` | Create custom workflow |
 | GET | `/workflows/{id}` | Workflow detail |
 | PATCH | `/workflows/{id}` | Update custom workflow |
@@ -2712,9 +2779,9 @@ type PicardAgentRole =
 | Phase 3 — Citation chat + listing map-reduce | **Complete** |
 | Phase 4 — Tabular review | Complete |
 | Phase 5a — Desktop, CI, release, settings | **Complete** |
-| Phase 5b — OSS polish remainder | In progress |
+| Phase 5b — OSS polish remainder | **Complete** (optional gaps: §15.3.1 CI corpus) |
 | Phase 6 — Workflow library + `flow_json` schema | **Complete** |
-| Phase 7.0 — Citation Kernel extraction | Planned |
+| Phase 7.0 — Citation Kernel extraction | **Shipped** |
 | Phase 7a — Agent authoring (LightAgent + mem0) | Planned |
 | Phase 7b — LightFlow execution | Planned |
 | Phase 8 — Template drafting + CSV step packs | Planned |
@@ -2723,7 +2790,7 @@ type PicardAgentRole =
 
 **EX-3 (NER layer):** Continuous quality track (§8.3.4) — improves CARP/listing recall; does not block shipped Chat. Re-run `backfill_entities.py` → `export_test_corpus.py` after extractor changes.
 
-**Post-v1 dependency note:** Phase 6 schema before Phase 7b execution. **Phase 7.0** (Citation Kernel extraction) blocks 7a tool registry — chat must delegate to kernel with regression green. Phase 7a can ship in parallel with 6 if `propose_flow` only outputs draft JSON. Phase 7b blocks on `flow_json` in DB + 7.0 kernel. Phase 8 writer/csv_bind steps after 7b. Phase 9 `web` role after 7b.
+**Post-v1 dependency note:** **Phase 6 complete** — `flow_json` in DB unblocks 7b. **Phase 7.0** (Citation Kernel extraction) blocks 7a tool registry — chat must delegate to kernel with regression green. **7a (mem0)** recommended before 7b for `propose_flow` UX; 7b hard-depends on 7.0 + 6 only. Phase 8 writer/csv_bind steps after 7b. Phase 9 `web` role after 7b.
 
 ```mermaid
 flowchart TD
@@ -3025,7 +3092,7 @@ flowchart TD
 
 ---
 
-### Phase 5b: OSS polish remainder — in progress
+### Phase 5b: OSS polish remainder — complete
 
 | Task | Detail |
 | ---- | ------ |
@@ -3057,9 +3124,9 @@ flowchart TD
 
 ---
 
-### Phase 7.0: Citation Kernel extraction (Weeks 22–23) — planned
+### Phase 7.0: Citation Kernel extraction (Weeks 22–23) — shipped
 
-**Goal:** Extract the shipped chat citation pipeline into `citation_kernel.py` so Chat, Agent tools, and LightFlow steps share one implementation (§7.6). No new user-facing features — refactor only.
+**Goal:** Extract the shipped chat citation pipeline into `citation_kernel.py` so Chat, Agent tools, and LightFlow steps share one implementation (§7.6). No new user-facing features — refactor only. **No mem0** in this phase.
 
 | Task | Deliverable |
 | ---- | ----------- |
@@ -3080,7 +3147,8 @@ flowchart TD
 | Task | Deliverable |
 | ---- | ----------- |
 | `lightagent_runtime.py` | `mode=agent` on `/chat/stream`; StreamEvent → SSE |
-| `agent_memory.py` | mem0 under `${PICARD_DATA_DIR}/mem0/` |
+| `agent_memory.py` | `PicardMemory` + mem0 under `MEM0_DATA_DIR` (§4.2.11) |
+| `memory_store_allowed()` | Store-time filter; unit tests for rejected legal citations |
 | `tools/registry.py` + adapters | Full registry (§4.2.10); all corpus tools use kernel |
 | Tools | `answer_from_corpus`, `search_corpus`, vault/upload/scope, workflow author tools |
 | HITL | HITL-SCOPE, HITL-URL, HITL-PLAN SSE + UI (§4.3, §12.6) |
@@ -3093,7 +3161,7 @@ flowchart TD
 
 ### Phase 7b: LightFlow execution (Weeks 27–29) — planned
 
-**Goal:** Deterministic runs after approval — `picard_flow_runner.py`, trace SSE, per-step kernel, `workflow_runs` (§10.7, §5.2.2).
+**Goal:** Deterministic runs after approval — `picard_flow_runner.py`, trace SSE, per-step kernel, `workflow_runs` (§10.7, §5.2.2). **`picard_flow_runner` does not invoke mem0** — personalization is frozen in approved `flow_json` + run input.
 
 | Task | Deliverable |
 | ---- | ----------- |
@@ -3113,7 +3181,7 @@ flowchart TD
 
 ### Phase 8: Template drafting + CSV step packs (Weeks 29–34) — planned
 
-**Goal:** `writer` role + Jinja; `csv_bind` deterministic step; multi-draft flows in `flow_json` (§8.6).
+**Goal:** `writer` role + Jinja; `csv_bind` deterministic step; multi-draft flows in `flow_json` (§8.6). Agent mode may **recall** template/CSV workflow preferences via mem0 (§4.2.11); draft sections still cite only through the Citation Kernel.
 
 | Task | Deliverable |
 | ---- | ----------- |
@@ -3137,7 +3205,7 @@ flowchart TD
 
 ### Phase 9: Connectors + web LightFlow steps (Weeks 35–40) — planned
 
-**Goal:** `web` role step in LightFlow; connector config in step `config`; Tier C (`[ext:N]`), off by default.
+**Goal:** `web` role step in LightFlow; connector config in step `config`; Tier C (`[ext:N]`), off by default. **Do not store** web snapshot text in mem0 (§4.2.11 rejected list).
 
 | Task | Deliverable |
 | ---- | ----------- |
@@ -3357,7 +3425,7 @@ Re-run after every extractor change: `backfill_entities.py` → `export_test_cor
 | TB-03 | Excel export fidelity | Opens cleanly; citation markers stripped |
 | TB-04 | Tabular ↔ chat citation parity | `TRChatPanel` + main chat resolve refs consistently |
 
-#### Phase 6 — Workflow library
+#### Phase 6 — Workflow library (shipped)
 
 | ID | Metric | Initial gate |
 |----|--------|--------------|
@@ -3383,7 +3451,7 @@ Re-run after every extractor change: `backfill_entities.py` → `export_test_cor
 | AG-01 | Multi-step citation integrity | 100% corpus claims use valid `[N]` after agent run (via kernel — CK-02) |
 | AG-02 | Per-step refuse rate | 100% empty retrieval tools emit `step_refused`, no filler (CK-01) |
 | AG-03 | Agent loop latency p95 | ≤ 30s on Chester with Ollama 8B, 5-iteration cap |
-| AG-04 | mem0 recall | Plan acceptance improves on 2nd-session golden scenario |
+| AG-04 | mem0 recall | **Golden (§4.2.11):** Session A user teaches procedural preference (e.g. DD sign-off chain); Session B related goal → non-empty `memory_hit` and improved `propose_flow`/plan vs cold start; negative: answer with `[1]` citations rejected by `memory_store_allowed` |
 | AG-05 | Mode isolation | Chat ↔ Agent switch does not corrupt RAG citations |
 
 #### Composite use-case gates (Phases 7a–9)
@@ -3562,8 +3630,10 @@ Run before Phase 2 tag and monthly when golden set changes. Document results in 
 
 ---
 
-## 16. Future extensions (post-v1)
+## 16. Future extensions (Phase 7+)
 
+
+“Post-v1” here means **Phase 7 and later** — Phase 6 workflow library is part of the shipped product (§14).
 
 | Extension                 | Source inspiration                    | Complexity | Notes |
 | ------------------------- | ------------------------------------- | ---------- | ----- |
@@ -3684,6 +3754,8 @@ LIGHTAGENT_VERSION=0.8                      # minimum for LightFlow
 AGENT_MAX_ITERATIONS=5
 AGENT_SCOPE_CONFIRM_MIN_DOCS=10           # HITL-SCOPE threshold (§4.3)
 MEM0_DATA_DIR=${PICARD_DATA_DIR}/mem0
+MEM0_MAX_ENTRIES=0                        # 0 = unlimited (firm); court: e.g. 500
+MEM0_STORE_ON_RUN_END=true                # sanitized summary after agent run (7a)
 ENABLE_CONNECTORS=false                     # Phase 9
 COMPLIANCE_SANDBOX=false                    # disables all external tiers
 
@@ -3707,4 +3779,4 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ---
 
-*Last updated: Jun 2026 (Phases 0–4 and 5a complete; agentic Phases 6–10 planned with Citation Kernel baseline §7.6, full Tool Registry §4.2.10, HITL §4.3, composite playbooks §10.8). Reference sibling project docs when available for deeper dives into inherited patterns.*
+*Last updated: Jun 2026 (Phases 0–6 and 7.0 complete; Phases 7a–10 planned — Citation Kernel §7.6, Tool Registry §4.2.10, PicardMemory §4.2.11, LightFlow §10.7, HITL §4.3, composite playbooks §10.8). Reference sibling project docs when available for deeper dives into inherited patterns.*

@@ -64,7 +64,7 @@ def test_list_sessions_ordered_by_activity(client, chat_session, monkeypatch):
     async def fake_stream(*args, **kwargs):
         yield "Hi."
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 
@@ -125,7 +125,7 @@ def test_ab01_refuse_no_llm_tokens(corpus_client, monkeypatch):
         called["stream"] = True
         yield "should not run"
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 
@@ -158,7 +158,7 @@ def test_chat_stream_mock_llm(client, chat_session, monkeypatch):
     async def fake_stream(*args, **kwargs):
         yield "Answer [1]."
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 
@@ -191,7 +191,7 @@ def test_chat_stream_progress_snippets(corpus_client, monkeypatch):
     async def fake_stream(*args, **kwargs):
         yield "Answer [1]."
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 
@@ -247,7 +247,7 @@ def test_list_sessions_after_user_message(client, chat_session, monkeypatch):
     async def fake_stream(*args, **kwargs):
         yield "Answer."
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 
@@ -285,7 +285,7 @@ def test_stream_persists_document_scope_and_autotitle(client, chat_session, monk
     async def fake_stream(*args, **kwargs):
         yield "Answer [1]."
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 
@@ -320,7 +320,7 @@ def test_messages_include_references_after_stream(client, chat_session, monkeypa
     async def fake_stream(*args, **kwargs):
         yield "Answer [1]."
 
-    monkeypatch.setattr("app.services.chat.stream_completion", fake_stream)
+    monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
 

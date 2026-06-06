@@ -123,6 +123,32 @@ def test_citation_map_surfaces_name_from_declaration_chunk():
     assert "ma x" in preview or "chester" in preview
 
 
+def test_validate_response_preserves_markdown_for_listing_intent():
+    hits = [_hit("c1"), _hit("c2")]
+    cmap = build_citation_map(hits)
+    answer = (
+        "## Summary\n"
+        "Overview line [1].\n\n"
+        "## doc.pdf\n"
+        "Parties: A vs B [1].\n"
+        "Forum: CCI [2].\n"
+        "- Allegation one [1].\n"
+        "- Allegation two [2].\n"
+    )
+    cleaned, validation = validate_response(answer, cmap, intent="entity_matter_listing")
+    assert "Parties: A vs B [1].\nForum: CCI [2]." in cleaned
+    assert cleaned.count("\n") >= answer.count("\n") - 1
+    assert validation.markers_reassigned == 0
+
+
+def test_validate_response_still_collapses_prose_without_listing_intent():
+    hits = [_hit("c1"), _hit("c2")]
+    cmap = build_citation_map(hits)
+    answer = "First claim [1].\nSecond claim [2]."
+    cleaned, _ = validate_response(answer, cmap)
+    assert "\n" not in cleaned or cleaned == "First claim [1]. Second claim [2]."
+
+
 def test_fact_verifier_strips_unsupported_amount():
     hit = SearchHit(
         chunk_id="c1",

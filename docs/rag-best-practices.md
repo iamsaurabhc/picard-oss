@@ -7,7 +7,7 @@ Implementation notes from [Enhancing RAG: A Study of Best Practices](https://arx
 | Technique | Config | Notes |
 |-----------|--------|-------|
 | Query expansion | `ENABLE_QUERY_EXPANSION=true` | Broad OR passes before anchor FTS; TTL cache |
-| Focus Mode excerpts | `ENABLE_FOCUS_EXCERPTS=true` | Sentence-level scoring in `excerpt_selector` |
+| Focus Mode excerpts | `ENABLE_FOCUS_EXCERPTS=true` | Sentence-level scoring in `excerpt_selector` (disabled for entity listing via `listing_disable_focus_excerpts` — page-level context needs full page coherence) |
 | Contrastive prompts | `PROMPT_VARIANT=help_v2` | Static good/bad examples in `app/prompts/legal_rag.py` |
 | FactVerifier lite | always on in `validate_response` | Strips unsupported amounts/dates vs cited preview |
 | Citation judge | `ENABLE_CITATION_JUDGE` | `CITATION_JUDGE_FAIL_CLOSED` for factual intents |
@@ -36,10 +36,31 @@ ENABLE_HYBRID_SEARCH=true
 - `R-05-expansion_*` — recall lift with expansion (`chester_bench_002`, `chester_bench_003`)
 - Tier A gates in `backend/eval/runner.py`
 
+## Agent mode (kernel-first)
+
+Agent chat (`mode=agent`) uses **`stream_chat` with `mode=agent`** — the same Citation Kernel path as RAG mode. There is no second LLM paraphrase or post-tool fallback for vault Q&A.
+
+| Paper technique | Agent behavior |
+|-----------------|----------------|
+| Query expansion | Forced on during agent retrieval (`retrieve_for_agent`) |
+| Focus excerpts | Forced on during agent retrieval |
+| Breadth policy | `agent_retrieval_policy.py`: `catalog` / `matter_deep` / `pinpoint` from intent + scoped doc count |
+| Persona | `firm` vs `court` caps and prompt tone (`firm_agent_*` / `court_agent_*` settings) |
+| Contrastive prompts | `synthesis_mode=agent` + per-profile overlays in `citations.py` |
+| Listing map-reduce | Scoped `document_ids` always included in discovery union |
+| Page-level listing context | `entity_page_context.py` | Entity-ranked full pages; map-reduce when ≥ `listing_map_reduce_min_docs` (default 4) |
+| Hybrid dense+sparse | Same as Chat — enable `ENABLE_HYBRID_SEARCH` when embeddings are backfilled |
+
+**Tier A invariant:** Every agent answer streams `content` with `[N]` markers and a `references` event before `done`.
+
+**Tools:** `answer_from_corpus` / `search_corpus` remain for workflow steps (LightFlow), not the primary Agent chat author.
+
+**Intent:** Queries like `list all case details involving google v CUTS` route to `entity_matter_listing` (not `case_overview`) even when a `v` pattern is present.
+
 ## Benchmarks
 
 ```bash
 cd backend && source .venv/bin/activate
 python scripts/benchmark_search.py
-python -m pytest tests/test_focus_excerpt.py tests/test_query_expansion.py tests/test_citations.py -q
+python -m pytest tests/test_focus_excerpt.py tests/test_query_expansion.py tests/test_citations.py tests/test_query_understanding_case_v.py tests/test_agent_tools_citations.py tests/test_lightagent_hybrid_gate.py -q
 ```

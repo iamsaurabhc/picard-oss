@@ -150,3 +150,65 @@ def enrich_fts_pool_with_hybrid(
         "vector_hits": len(vec_hits),
         "fused_size": len(pool),
     }
+
+
+def vector_page_scores(
+    db: Session,
+    *,
+    queries: list[str],
+    workspace_id: str,
+    document_ids: list[str] | None,
+    top_k_per_query: int = 8,
+) -> dict[int, float]:
+    """Best embedding similarity per page across one or more facet queries."""
+    if not settings.enable_hybrid_search:
+        return {}
+
+    page_scores: dict[int, float] = {}
+    seen_queries: set[str] = set()
+    for raw in queries:
+        q = (raw or "").strip()
+        key = q.casefold()
+        if not q or key in seen_queries:
+            continue
+        seen_queries.add(key)
+        vec_hits = vector_search(
+            db,
+            query=q,
+            workspace_id=workspace_id,
+            document_ids=document_ids,
+            top_k=top_k_per_query,
+        )
+        for hit, sim in vec_hits:
+            page = int(hit.page_number)
+            page_scores[page] = max(page_scores.get(page, 0.0), sim)
+    return page_scores
+
+
+def fuse_page_scores_rrf(
+    fts_scores: dict[int, float],
+    vector_scores: dict[int, float],
+) -> dict[int, float]:
+    """RRF-merge FTS and vector page scores into a single ranking signal."""
+    if not fts_scores and not vector_scores:
+        return {}
+
+    fts_ranked = sorted(fts_scores.items(), key=lambda x: -x[1])
+    fts_ranks = {page: i + 1 for i, (page, _) in enumerate(fts_ranked)}
+    vec_ranked = sorted(vector_scores.items(), key=lambda x: -x[1])
+    vec_ranks = {page: i + 1 for i, (page, _) in enumerate(vec_ranked)}
+
+    all_pages = set(fts_ranks) | set(vec_ranks)
+    w_fts = settings.hybrid_rrf_weight_fts
+    w_vec = 1.0 - w_fts
+    k = settings.hybrid_rrf_k
+
+    fused: dict[int, float] = {}
+    for page in all_pages:
+        rrf = 0.0
+        if page in fts_ranks:
+            rrf += w_fts * _rrf_score(fts_ranks[page], k)
+        if page in vec_ranks:
+            rrf += w_vec * _rrf_score(vec_ranks[page], k)
+        fused[page] = rrf
+    return fused

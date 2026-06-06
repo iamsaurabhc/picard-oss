@@ -71,6 +71,50 @@ function phaseLabel(ev: Extract<ChatStreamEvent, { event: "progress" }>): string
     return "Search complete";
   }
 
+  if (phase === "page_rank") {
+    if (status === "start" && ev.document_name) {
+      return `Ranking pages in ${ev.document_name}`;
+    }
+    const pages = (ev as { pages_selected?: number[] }).pages_selected;
+    if (status === "done" && pages != null) {
+      const n = pages.length;
+      return `Selected ${n} page${n === 1 ? "" : "s"}${ev.document_name ? ` in ${ev.document_name}` : ""}`;
+    }
+    return status === "start" ? "Ranking pages" : "Page ranking complete";
+  }
+
+  if (phase === "coverage") {
+    if (status === "start") return "Building context coverage";
+    const chunks = (ev as { chunk_count?: number }).chunk_count;
+    if (chunks != null) return `Context ready (${chunks} chunk${chunks === 1 ? "" : "s"})`;
+    return "Coverage complete";
+  }
+
+  if (phase === "map") {
+    if (status === "start") {
+      if (ev.document_name) return `Mapping ${ev.document_name}`;
+      if (ev.documents_to_map != null) {
+        return `Mapping per-document briefs (${ev.documents_to_map} document${ev.documents_to_map === 1 ? "" : "s"})`;
+      }
+      return "Mapping per-document briefs";
+    }
+    if (ev.document_name) {
+      const chunks = (ev as { chunk_count?: number }).chunk_count;
+      const suffix =
+        chunks != null ? ` (${chunks} chunk${chunks === 1 ? "" : "s"})` : "";
+      return `Mapped ${ev.document_name}${suffix}`;
+    }
+    if ((ev as { brief_count?: number }).brief_count != null) {
+      const n = (ev as { brief_count: number }).brief_count;
+      return `Map phase complete (${n} brief${n === 1 ? "" : "s"})`;
+    }
+    return "Map phase complete";
+  }
+
+  if (phase === "reduce") {
+    return status === "start" ? "Synthesizing catalog" : "Reduce complete";
+  }
+
   if (phase === "rank") {
     if (status === "start") return "Ranking evidence";
     if (ranked_count != null) {
@@ -88,8 +132,12 @@ function phaseLabel(ev: Extract<ChatStreamEvent, { event: "progress" }>): string
 
 function phaseStepId(ev: Extract<ChatStreamEvent, { event: "progress" }>): string {
   const base = `${ev.phase}:${ev.label ?? "default"}:${ev.status}`;
-  if (ev.label === "per_document" && ev.document_id) {
-    return `${base}:${ev.document_id}`;
+  const docId = ev.document_id;
+  if (
+    docId &&
+    (ev.label === "per_document" || ev.phase === "page_rank" || ev.phase === "map")
+  ) {
+    return `${base}:${docId}`;
   }
   return base;
 }
@@ -133,29 +181,6 @@ export function useRetrievalActivity() {
       const id = phaseStepId(ev);
       const label = phaseLabel(ev);
       setSteps((prev) => {
-        // #region agent log
-        if (ev.label === "per_document") {
-          const dupCount = prev.filter((s) => s.kind === "phase" && s.id === id).length;
-          fetch("http://127.0.0.1:7942/ingest/fc646775-8de3-41b6-b910-39cf0cc7992b", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "755b1b" },
-            body: JSON.stringify({
-              sessionId: "755b1b",
-              location: "useRetrievalActivity.ts:setSteps",
-              message: "per_document progress event",
-              data: {
-                id,
-                status: ev.status,
-                document_id: ev.document_id,
-                document_name: ev.document_name,
-                existingDupCount: dupCount,
-              },
-              timestamp: Date.now(),
-              hypothesisId: "H1",
-            }),
-          }).catch(() => {});
-        }
-        // #endregion
         if (ev.status === "start") {
           const withoutDup = prev.filter((s) => !(s.kind === "phase" && s.id === id));
           return [
@@ -240,12 +265,14 @@ export function useRetrievalActivity() {
     [steps]
   );
 
+  const shouldMinimize = hasContentStarted || stepCount >= 8;
+
   return {
     steps,
     stepCount,
     isActive,
     hasContentStarted,
-    shouldMinimize: hasContentStarted,
+    shouldMinimize,
     retrievalSummary,
     reset,
     start,

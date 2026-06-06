@@ -100,6 +100,40 @@ def run_migrations(engine: Engine) -> None:
                 )
             """))
 
+        if "agent_runs" not in tables:
+            conn.execute(text("""
+                CREATE TABLE agent_runs (
+                  id TEXT PRIMARY KEY,
+                  session_id TEXT,
+                  workspace_id TEXT NOT NULL,
+                  profile TEXT NOT NULL,
+                  mode TEXT NOT NULL DEFAULT 'agent',
+                  plan_json TEXT,
+                  events_json TEXT,
+                  status TEXT DEFAULT 'running',
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE SET NULL,
+                  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+                )
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_agent_runs_workspace_created
+                  ON agent_runs(workspace_id, created_at)
+            """))
+
+        if "memory_sync_log" not in tables:
+            conn.execute(text("""
+                CREATE TABLE memory_sync_log (
+                  id TEXT PRIMARY KEY,
+                  workspace_id TEXT,
+                  mem0_user_id TEXT NOT NULL,
+                  operation TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL
+                )
+            """))
+
 
 def _init_sql_path() -> Path:
     rel = Path(__file__).parent / "init.sql"

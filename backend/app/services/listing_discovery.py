@@ -10,8 +10,35 @@ from app.config import settings
 from app.services.entity_index import (
     lookup_documents_for_party,
     lookup_documents_for_party_tokens,
+    sanitize_party_canonicals,
 )
 from app.services.query_understanding import QueryUnderstanding, SearchPass
+
+_ENTITY_DISCOVERY_BOOST = 10_000
+_TOKEN_ENTITY_DISCOVERY_BOOST = 5_000
+_PARTY_FTS_DISCOVERY_BOOST = 1_000
+
+
+def _party_name_tokens(understanding: QueryUnderstanding) -> list[str]:
+    tokens: list[str] = []
+    target = understanding.target_entity
+    if target:
+        tokens.extend(t for t in target.canonical.split() if len(t) > 2)
+        for s in target.surfaces:
+            tokens.extend(t for t in s.split() if len(t) > 2)
+    for c in understanding.constraints:
+        if c.type == "party":
+            tokens.extend(t for t in c.canonical.split() if len(t) > 2)
+            for s in c.surfaces:
+                tokens.extend(t for t in s.split() if len(t) > 2)
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tokens:
+        key = t.casefold()
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out[:4]
 
 
 def _target_match_tokens(understanding: QueryUnderstanding) -> list[str]:
@@ -66,6 +93,18 @@ def discover_documents_from_party_fts(
 
     doc_limit = limit or settings.chat_listing_discovery_doc_limit
     per_doc: dict[str, int] = defaultdict(int)
+    party_tokens = _party_name_tokens(understanding)
+
+    if len(party_tokens) >= 2:
+        and_terms = " AND ".join(party_tokens[:2])
+        for doc_id, cnt in fts_discover_documents(
+            db,
+            fts_query=and_terms,
+            workspace_id=workspace_id,
+            document_ids=document_ids,
+            limit=doc_limit,
+        ):
+            per_doc[doc_id] = max(per_doc[doc_id], _PARTY_FTS_DISCOVERY_BOOST + cnt)
 
     if match_tokens:
         or_terms = " OR ".join(match_tokens[:6])
@@ -80,6 +119,20 @@ def discover_documents_from_party_fts(
             per_doc[doc_id] = max(per_doc[doc_id], cnt)
 
     search_passes = list(understanding.search_passes)
+    if understanding.target_entity and party_tokens:
+        search_passes = [
+            SearchPass(
+                label="party_anchor",
+                fts_terms=party_tokens[:2],
+                operator="AND" if len(party_tokens) >= 2 else "OR",
+                pin_best=True,
+            ),
+            *[
+                sp
+                for sp in search_passes
+                if sp.label not in {"party_anchor", "entity_anchor"}
+            ],
+        ]
     if not search_passes:
         terms = list(understanding.fts.must_terms[:2])
         if not terms and understanding.target_entity:
@@ -106,7 +159,7 @@ def discover_documents_from_party_fts(
             ):
                 per_doc[doc_id] = max(per_doc[doc_id], cnt)
 
-    if query.strip() and len(per_doc) < doc_limit:
+    if query.strip() and len(per_doc) < doc_limit and not understanding.target_entity:
         raw_fts = _sanitize_fts_query(query)
         if raw_fts:
             for doc_id, cnt in fts_discover_documents(
@@ -148,6 +201,7 @@ def discover_listing_documents(
     document_ids: list[str] | None = None,
     query: str = "",
     tabular_review_id: str | None = None,
+    discovery_doc_limit: int | None = None,
 ) -> tuple[list[tuple[str, int]], dict]:
     """
     Union entity index, party-token entity lookup, FTS doc facets, optional tabular.
@@ -156,16 +210,16 @@ def discover_listing_documents(
     target = understanding.target_entity
     canonicals: list[str] = []
     if target and target.resolved_canonicals:
-        canonicals = list(target.resolved_canonicals)
+        canonicals = sanitize_party_canonicals(list(target.resolved_canonicals))
     elif target:
-        canonicals = [target.canonical]
+        canonicals = sanitize_party_canonicals([target.canonical])
     if not canonicals and understanding.constraints:
         for c in understanding.constraints:
             if c.type == "party":
-                canonicals = [c.canonical]
+                canonicals = sanitize_party_canonicals([c.canonical])
                 break
 
-    discovery_limit = settings.chat_listing_discovery_doc_limit
+    discovery_limit = discovery_doc_limit or settings.chat_listing_discovery_doc_limit
     match_tokens = _target_match_tokens(understanding)
 
     entity_rows = lookup_documents_for_party(
@@ -203,9 +257,15 @@ def discover_listing_documents(
 
     merged_scores: dict[str, int] = {}
     for doc_id, cnt in entity_rows:
-        merged_scores[doc_id] = max(merged_scores.get(doc_id, 0), cnt)
+        merged_scores[doc_id] = max(
+            merged_scores.get(doc_id, 0),
+            _ENTITY_DISCOVERY_BOOST + cnt,
+        )
     for doc_id, cnt in token_entity_rows:
-        merged_scores[doc_id] = max(merged_scores.get(doc_id, 0), cnt)
+        merged_scores[doc_id] = max(
+            merged_scores.get(doc_id, 0),
+            _TOKEN_ENTITY_DISCOVERY_BOOST + cnt,
+        )
     for doc_id, cnt in fts_rows:
         merged_scores[doc_id] = max(merged_scores.get(doc_id, 0), cnt)
     for doc_id, cnt in tabular_rows:
@@ -222,6 +282,10 @@ def discover_listing_documents(
         for doc_id in get_tabular_review_document_ids(db, tabular_review_id):
             merged_scores[doc_id] = 1
 
+    if document_ids:
+        for doc_id in document_ids:
+            merged_scores[doc_id] = max(merged_scores.get(doc_id, 0), 1)
+
     doc_rows = sorted(merged_scores.items(), key=lambda x: -x[1])
     total_union = len(doc_rows)
 
@@ -235,5 +299,6 @@ def discover_listing_documents(
     diagnostics = {
         "discovery_sources": sources,
         "documents_total_discovered": total_union,
+        "documents_in_scope": len(document_ids) if document_ids else 0,
     }
     return doc_rows, diagnostics

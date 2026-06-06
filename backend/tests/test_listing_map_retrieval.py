@@ -93,19 +93,15 @@ def test_retrieve_hits_seeds_from_entity_pages_when_fts_empty(db_session):
         ),
     )
 
-    with patch(
-        "app.services.listing_map_reduce.run_search_passes_for_document",
-        return_value=[],
-    ):
-        hits = retrieve_hits_for_listing_document(
-            db_session,
-            workspace_id=ws.id,
-            document_id=doc_id,
-            understanding=understanding,
-            query="list cases against Google LLC",
-            canonicals=[canonical],
-            chunks_per_doc=4,
-        )
+    hits, diag = retrieve_hits_for_listing_document(
+        db_session,
+        workspace_id=ws.id,
+        document_id=doc_id,
+        understanding=understanding,
+        query="list cases against Google LLC",
+        canonicals=[canonical],
+    )
 
     assert hits
+    assert diag.get("pages_selected")
     assert all(h.document_id == doc_id for h in hits)

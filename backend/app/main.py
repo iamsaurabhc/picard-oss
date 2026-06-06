@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import reload_settings, settings as app_settings
 from app.db.session import init_db
 from app.routers import (
+    agent,
     chat,
     documents,
     prompts,
@@ -76,6 +77,7 @@ app.add_middleware(
 app.include_router(workspaces.router)
 app.include_router(documents.router)
 app.include_router(search.router)
+app.include_router(agent.router)
 app.include_router(chat.router)
 app.include_router(tabular.router)
 app.include_router(settings_router.router)

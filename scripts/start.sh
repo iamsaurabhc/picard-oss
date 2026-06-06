@@ -37,6 +37,15 @@ fi
 
 trap 'kill 0' EXIT
 
+# Desktop .app binds 127.0.0.1:8000 (picard-backend). Dev uvicorn uses 0.0.0.0:8000 but
+# browsers still reach the desktop API first — Settings/agent mode then look "stuck".
+if pgrep -f picard-backend >/dev/null 2>&1; then
+  echo "Stopping Picard desktop backend (picard-backend) so dev API can use port 8000…"
+  echo "  Tip: quit Picard.Law OSS.app while running ./scripts/start.sh"
+  pkill -f picard-backend 2>/dev/null || true
+  sleep 1
+fi
+
 if [ "${START_PADDLE_OCR:-0}" = "1" ]; then
   if [ -x "$ROOT/scripts/start-paddleocr.sh" ]; then
     "$ROOT/scripts/start-paddleocr.sh" &
@@ -56,7 +65,11 @@ fi
   # Always use repo-root data dir (backend/.env uses relative paths for cwd=backend)
   export PICARD_DATA_DIR="$ROOT/.picard-data"
   export DATABASE_URL="sqlite:///$ROOT/.picard-data/picard.db"
-  uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+  if lsof -iTCP:8000 -sTCP:LISTEN 2>/dev/null | grep -q picard-backend; then
+    echo "ERROR: picard-backend still owns port 8000. Quit Picard.Law OSS.app, then re-run ./scripts/start.sh" >&2
+    exit 1
+  fi
+  uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ) &
 
 (

@@ -133,5 +133,6 @@ def test_chat_only_discovery_respects_document_scope(db_session):
 
 
 def test_map_reduce_triggers_without_tabular(db_session):
-    assert should_use_listing_map_reduce(["d1", "d2"])
+    assert should_use_listing_map_reduce(["d1", "d2", "d3", "d4"])
+    assert not should_use_listing_map_reduce(["d1", "d2"])
     assert not should_use_listing_map_reduce(["d1"])

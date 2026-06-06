@@ -6,9 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.schemas import SearchHit
-from app.services.entity_index import lookup_pages_for_party_in_document
+from app.services.entity_page_context import (
+    party_canonicals_from_understanding,
+    retrieve_listing_page_hits,
+)
 from app.services.listing_discovery import discover_listing_documents
-from app.services.pass_retrieval import run_search_passes_for_document
 from app.services.planned_retrieval import _fts_hit_to_search_hit
 from app.services.query_understanding import QueryUnderstanding, SearchPass
 from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
@@ -76,6 +78,8 @@ def entity_listing_retrieve_with_progress(
     query: str = "",
     tabular_review_id: str | None = None,
     emitter: RetrievalProgressEmitter | None = None,
+    discovery_doc_limit: int | None = None,
+    agent_deep: bool = False,
 ) -> Iterator[dict]:
     """Entity-first retrieval: discover documents, then run planner passes per document."""
     progress = emitter or RetrievalProgressEmitter()
@@ -96,6 +100,7 @@ def entity_listing_retrieve_with_progress(
         document_ids=document_ids,
         query=query,
         tabular_review_id=tabular_review_id,
+        discovery_doc_limit=discovery_doc_limit,
     )
     yield progress.progress(
         "search",
@@ -113,6 +118,7 @@ def entity_listing_retrieve_with_progress(
         document_ids_discovered,
         tabular_review_id=tabular_review_id,
         db=db,
+        document_ids=document_ids,
     ):
         diagnostics = {
             "retrieval_strategy": "entity_matter_listing",
@@ -131,25 +137,23 @@ def entity_listing_retrieve_with_progress(
         yield progress.progress("search", "done", pool_size=0, hit_count=0, strategy="listing_map_reduce")
         return [], diagnostics
 
-    search_passes = list(understanding.search_passes)
-    if not search_passes:
-        terms = list(understanding.fts.must_terms[:2])
-        if not terms and understanding.target_entity:
-            terms = [
-                t for t in understanding.target_entity.canonical.split()
-                if len(t) > 2
-            ][:2]
-        if terms:
-            search_passes = [
-                SearchPass(label="entity_anchor", fts_terms=terms, operator="OR", pin_best=False)
-            ]
+    party_canonicals = party_canonicals_from_understanding(understanding)
+    if not party_canonicals:
+        party_canonicals = canonicals
+
     pool: dict = {}
     pages_per_doc: dict[str, list[int]] = {}
     per_doc_hits: dict[str, int] = {}
 
-    chunks_per_doc = settings.chat_listing_chunks_per_doc
     min_per_doc = settings.chat_listing_min_chunks_per_doc
-    pass_top_k = max(chunks_per_doc, 4)
+    max_per_doc = settings.listing_max_pages_per_doc
+    search_passes = list(understanding.search_passes)
+    if not search_passes:
+        terms = list(understanding.fts.must_terms[:2])
+        if terms:
+            search_passes = [
+                SearchPass(label="entity_anchor", fts_terms=terms, operator="OR", pin_best=False)
+            ]
 
     if not doc_rows and search_passes:
         yield progress.progress("search", "start", label="fallback_planned_passes")
@@ -168,10 +172,10 @@ def entity_listing_retrieve_with_progress(
                 workspace_id=workspace_id,
                 document_ids=document_ids,
                 top_k=settings.chat_listing_pool_k,
-                max_chunks_per_doc=chunks_per_doc,
+                max_chunks_per_doc=max_per_doc,
             )
             fallback.extend(hits)
-            _merge_pool(pool, hits)
+            _merge_pool(pool, [_fts_hit_to_search_hit(h) for h in hits])
         doc_rows = [(doc_id, 1) for doc_id in {h.document_id for h in fallback}]
         yield progress.progress("search", "done", label="fallback_planned_passes", hit_count=len(fallback))
 
@@ -184,25 +188,28 @@ def entity_listing_retrieve_with_progress(
             document_id=doc_id,
             document_name=doc_name,
         )
-        entity_pages = lookup_pages_for_party_in_document(
-            db, workspace_id, doc_id, canonicals,
-        )
-        pages_per_doc[doc_id] = sorted(entity_pages)
-
-        doc_hits = run_search_passes_for_document(
+        yield progress.progress("page_rank", "start", document_id=doc_id, document_name=doc_name)
+        doc_hits, page_diag = retrieve_listing_page_hits(
             db,
             workspace_id=workspace_id,
             document_id=doc_id,
+            understanding=understanding,
             query=query,
-            search_passes=search_passes,
-            anchor_plan=understanding.fts,
-            page_hint=entity_pages or None,
-            pass_top_k=pass_top_k,
-            max_chunks_per_doc=chunks_per_doc,
+            canonicals=party_canonicals,
+            agent_deep=agent_deep,
         )
-        _merge_pool(pool, doc_hits)
+        pages_per_doc[doc_id] = page_diag.get("pages_selected") or []
+        for h in doc_hits:
+            _merge_pool(pool, [h])
         per_doc_hits[doc_id] = len(doc_hits)
 
+        yield progress.progress(
+            "page_rank",
+            "done",
+            document_id=doc_id,
+            document_name=doc_name,
+            pages_selected=pages_per_doc[doc_id],
+        )
         best = progress.best_hit(doc_hits)
         if best:
             snippet = progress.snippet_from_hit(best, f"doc:{doc_name}")
@@ -215,15 +222,15 @@ def entity_listing_retrieve_with_progress(
             document_id=doc_id,
             document_name=doc_name,
             hit_count=per_doc_hits.get(doc_id, 0),
-            pass_labels=[p.label for p in search_passes],
+            pages_selected=pages_per_doc[doc_id],
         )
 
-    merged = sorted(pool.values(), key=lambda h: h.score)
+    merged = list(pool.values())
     doc_order = [d for d, _ in doc_rows] if doc_rows else sorted({h.document_id for h in merged})
     diverse = _apply_doc_quotas(
         merged,
         min_per_doc=min_per_doc,
-        max_per_doc=chunks_per_doc,
+        max_per_doc=max_per_doc,
         limit=settings.chat_listing_pool_k,
         doc_order=doc_order,
     )
@@ -247,7 +254,7 @@ def entity_listing_retrieve_with_progress(
                 workspace_id=workspace_id,
                 document_ids=document_ids,
                 top_k=settings.chat_listing_pool_k,
-                max_chunks_per_doc=chunks_per_doc,
+                max_chunks_per_doc=max_per_doc,
             )
             diverse = [_fts_hit_to_search_hit(h) for h in rescue_hits]
             if diverse:
@@ -273,7 +280,11 @@ def entity_listing_retrieve_with_progress(
     if rescue_note:
         diagnostics["rescue"] = rescue_note
     yield progress.progress("search", "done", pool_size=len(pool), hit_count=len(diverse))
-    return [_fts_hit_to_search_hit(h) for h in diverse], diagnostics
+    out_hits = [
+        h if isinstance(h, SearchHit) else _fts_hit_to_search_hit(h)
+        for h in diverse
+    ]
+    return out_hits, diagnostics
 
 
 def entity_listing_retrieve(

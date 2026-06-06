@@ -37,7 +37,30 @@ if _env.exists():
 
 
 def _configure_db(db_path: Path) -> None:
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path.resolve()}"
+    resolved = db_path.resolve()
+    os.environ["DATABASE_URL"] = f"sqlite:///{resolved}"
+    os.environ["PICARD_DATA_DIR"] = str(resolved.parent)
+
+
+def _open_session(db_path: Path):
+    """Dedicated engine/session for the target DB (avoids stale global session)."""
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.bootstrap import run_migrations
+
+    url = f"sqlite:///{db_path.resolve()}"
+    engine = create_engine(url, connect_args={"check_same_thread": False})
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    run_migrations(engine)
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
 
 
 def _check_fastembed() -> None:
@@ -68,8 +91,8 @@ def main() -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        default=ROOT / ".picard-data" / "picard.db",
-        help="SQLite database path (default: .picard-data/picard.db)",
+        default=None,
+        help="SQLite database path (default: PICARD_DATA_DIR/picard.db from settings)",
     )
     parser.add_argument(
         "--workspace-id",
@@ -94,20 +117,23 @@ def main() -> int:
         help="List documents that would be processed, then exit",
     )
     args = parser.parse_args()
-    _configure_db(args.db)
 
     from sqlalchemy import select
 
-    from app.config import settings
+    from app.config import reload_settings, settings
     from app.db.models import Document
-    from app.db.session import SessionLocal
+
+    reload_settings()
+    db_path = args.db or settings.db_path
+    _configure_db(db_path)
+    reload_settings()
 
     if not args.reparse:
         _check_fastembed()
         os.environ["ENABLE_HYBRID_SEARCH"] = "true"
         settings.enable_hybrid_search = True
 
-    db = SessionLocal()
+    db = _open_session(db_path)
     try:
         stmt = select(Document).where(Document.parse_status == "done")
         if args.workspace_id:
@@ -117,7 +143,11 @@ def main() -> int:
         docs = db.scalars(stmt).all()
 
         if not docs:
-            print("No parsed documents found.")
+            print(f"No parsed documents found in {db_path.resolve()}.")
+            print(
+                "If your corpus lives elsewhere, pass --db "
+                "(e.g. ../.picard-data/picard.db when using ./scripts/start.sh)."
+            )
             return 0
 
         if args.dry_run:

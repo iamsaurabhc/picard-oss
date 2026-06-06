@@ -19,6 +19,12 @@ import { MarkdownWithCitations } from "@/components/MarkdownWithCitations";
 import { RetrievalActivityPanel } from "@/components/chat/RetrievalActivityPanel";
 import { ChatHistorySidebar } from "@/components/chat/ChatHistorySidebar";
 import { useRetrievalActivity } from "@/components/chat/useRetrievalActivity";
+import { AgentPlanPanel } from "@/components/agent/AgentPlanPanel";
+import { MemoryHitChip } from "@/components/agent/MemoryHitChip";
+import { ModeToggle } from "@/components/agent/ModeToggle";
+import { ScopeConfirmBar } from "@/components/agent/ScopeConfirmBar";
+import { ToolTimeline } from "@/components/agent/ToolTimeline";
+import { useAgentActivity } from "@/components/agent/useAgentActivity";
 import { MultiHighlightPDFViewer } from "@/components/MultiHighlightPDFViewer";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +67,18 @@ function mapHistoryMessage(m: ChatMessage): UiMessage {
   };
 }
 
+function dedupeHistoryMessages(msgs: UiMessage[]): UiMessage[] {
+  const out: UiMessage[] = [];
+  for (const m of msgs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.role === "user" && m.role === "user" && prev.content === m.content) {
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -87,6 +105,19 @@ export default function ChatPage() {
   const pendingNavigationRef = useRef<string | null>(null);
   const loadThreadSeqRef = useRef(0);
   const activity = useRetrievalActivity();
+  const agentActivity = useAgentActivity();
+  const modeParam = searchParams.get("mode");
+  const [chatMode, setChatMode] = useState<"rag" | "agent">(
+    modeParam === "agent" ? "agent" : "rag"
+  );
+
+  const { data: appSettings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => picardApi.getSettings(),
+  });
+  const agentModeOn = !!appSettings?.enable_agent_mode;
+  const agentPackReady = !!appSettings?.agent_pack_installed;
+  const agentChatReady = agentModeOn && agentPackReady;
 
   const { data: documents } = useQuery({
     queryKey: ["documents", ws],
@@ -122,7 +153,7 @@ export default function ChatPage() {
       ]);
       if (seq !== loadThreadSeqRef.current) return;
       setDocumentIds(session.document_ids ?? []);
-      setMessages(hist.map(mapHistoryMessage));
+      setMessages(dedupeHistoryMessages(hist.map(mapHistoryMessage)));
     } catch (err) {
       if (seq !== loadThreadSeqRef.current) return;
       const detail = err instanceof Error ? err.message : "Failed to load chat";
@@ -290,30 +321,45 @@ export default function ChatPage() {
     [ws, sessionId, refetchSessions, selectSession, router]
   );
 
-  const showActivityPanel = streaming || activity.steps.length > 0;
+  const showActivityPanel =
+    streaming || activity.steps.length > 0;
+  const showAgentToolsPanel =
+    chatMode === "agent" &&
+    (agentActivity.toolSteps.length > 0 || !!agentActivity.workflowDraft);
 
-  const onSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sessionId || !ws || !input.trim() || streaming) return;
-    const userText = input.trim();
-    setInput("");
-    setMessages((m) => [...m, { role: "user", content: userText }]);
-    setStreaming(true);
-    streamingRef.current = true;
-    activity.reset();
-    activity.start();
+  useEffect(() => {
+    if (modeParam === "agent" && agentChatReady) setChatMode("agent");
+  }, [modeParam, agentChatReady]);
+
+  const runStream = async (
+    message: string,
+    extra?: { approval_token?: string }
+  ) => {
     let assistant = "";
     let refs: ChatReference[] = [];
     let refused = false;
     let suggestions: string[] = [];
 
     const ingestStreamEvent = (ev: ChatStreamEvent) => {
-      activity.ingestEvent(ev);
+      if (
+        ev.event === "progress" ||
+        ev.event === "snippet" ||
+        ev.event === "retrieval" ||
+        ev.event === "content"
+      ) {
+        activity.ingestEvent(ev);
+      }
+      if (chatMode === "agent") {
+        agentActivity.ingestEvent(ev);
+      }
       if (ev.event === "content" && "delta" in ev) {
         assistant += ev.delta;
         setMessages((m) => upsertAssistantMessage(m, assistant));
       } else if (ev.event === "references") {
         refs = ev.references ?? [];
+        if (typeof ev.content === "string" && ev.content.length > 0) {
+          assistant = ev.content;
+        }
         refused = !!ev.refused;
         suggestions = ev.suggestions ?? [];
         setMessages((m) =>
@@ -326,41 +372,88 @@ export default function ChatPage() {
       }
     };
 
+    for await (const ev of picardApi.streamChat({
+      session_id: sessionId!,
+      workspace_id: ws!,
+      message,
+      mode: chatMode,
+      document_ids: documentIds.length ? documentIds : undefined,
+      workflow_id: workflowId || undefined,
+      approval_token: extra?.approval_token,
+    })) {
+      const errMsg =
+        ev.event === "error"
+          ? ("detail" in ev && ev.detail) || ("message" in ev && ev.message) || "Error"
+          : null;
+      if (errMsg) throw new Error(String(errMsg));
+      ingestStreamEvent(ev);
+    }
+    setMessages((m) =>
+      upsertAssistantMessage(m, assistant, {
+        references: refused ? undefined : refs,
+        refused,
+        suggestions: refused ? suggestions : undefined,
+      })
+    );
+    await queryClient.invalidateQueries({ queryKey: ["chat-sessions", ws] });
+    const hist = await picardApi.listChatMessages(sessionId!);
+    setMessages(dedupeHistoryMessages(hist.map(mapHistoryMessage)));
+  };
+
+  const onSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionId || !ws || !input.trim() || streaming) return;
+    const userText = input.trim();
+    setInput("");
+    setMessages((m) => [...m, { role: "user", content: userText }]);
+    setStreaming(true);
+    streamingRef.current = true;
+    activity.reset();
+    activity.start();
+    if (chatMode === "agent") {
+      agentActivity.reset();
+    }
+
     try {
-      for await (const ev of picardApi.streamChat({
-        session_id: sessionId,
-        workspace_id: ws,
-        message: userText,
-        document_ids: documentIds.length ? documentIds : undefined,
-        workflow_id: workflowId || undefined,
-      })) {
-        if (ev.event === "error") {
-          throw new Error(ev.detail);
-        }
-        ingestStreamEvent(ev);
-      }
-      setMessages((m) =>
-        upsertAssistantMessage(m, assistant, {
-          references: refused ? undefined : refs,
-          refused,
-          suggestions: refused ? suggestions : undefined,
-        })
-      );
-      await queryClient.invalidateQueries({ queryKey: ["chat-sessions", ws] });
-      const hist = await picardApi.listChatMessages(sessionId);
-      setMessages(hist.map(mapHistoryMessage));
+      await runStream(userText);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Chat stream failed";
-      setMessages((m) =>
-        upsertAssistantMessage(m, assistant || detail, {
-          references: assistant && refs.length ? refs : undefined,
-        })
-      );
+      setMessages((m) => upsertAssistantMessage(m, detail));
     } finally {
       streamingRef.current = false;
       setStreaming(false);
       activity.finish();
     }
+  };
+
+  const handleApproveScope = async () => {
+    const approval = agentActivity.pendingApproval;
+    if (!approval || !sessionId || !ws) return;
+    agentActivity.clearApproval();
+    setStreaming(true);
+    streamingRef.current = true;
+    try {
+      await runStream("Approved document scope.", { approval_token: approval.token });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Approval failed";
+      setMessages((m) => [...m, { role: "assistant", content: detail }]);
+    } finally {
+      streamingRef.current = false;
+      setStreaming(false);
+    }
+  };
+
+  const handleSaveWorkflow = async (title: string) => {
+    if (!ws || !agentActivity.workflowDraft) return;
+    await picardApi.createWorkflow({
+      workspace_id: ws,
+      type: "lightflow",
+      title,
+      flow_json: agentActivity.workflowDraft,
+      evidence_profile: { requires_corpus: true, allows_tabular: true },
+      profile: appSettings?.agent_profile === "court" ? "court" : "firm",
+    });
+    await queryClient.invalidateQueries({ queryKey: ["workflows", ws] });
   };
 
   const activeHighlights = activeMessageRefs ?? [];
@@ -402,8 +495,27 @@ export default function ChatPage() {
           className="shrink-0 font-serif text-2xl"
           style={{ fontFamily: "var(--font-garamond), serif" }}
         >
-          Chat
+          {chatMode === "agent" ? "Agent" : "Chat"}
         </h1>
+        {agentModeOn ? (
+          <span
+            title={
+              agentPackReady
+                ? undefined
+                : "Install the agent pack in Settings, then restart the API."
+            }
+          >
+            <ModeToggle
+              mode={chatMode}
+              disabled={streaming}
+              onChange={(m) => {
+                if (m === "agent" && !agentPackReady) return;
+                setChatMode(m);
+                if (m === "rag") agentActivity.reset();
+              }}
+            />
+          </span>
+        ) : null}
         <DocumentMultiSelect
           documents={(documents ?? []).map((d) => ({ id: d.id, file_name: d.file_name }))}
           selectedIds={scopedDocumentIds}
@@ -458,6 +570,29 @@ export default function ChatPage() {
         >
           <div className="flex flex-col overflow-hidden">
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
+              {chatMode === "agent" && (
+                <>
+                  <MemoryHitChip memories={agentActivity.memories} />
+                  {agentActivity.pendingApproval?.kind === "scope" && (
+                    <ScopeConfirmBar
+                      approval={agentActivity.pendingApproval}
+                      onApprove={() => void handleApproveScope()}
+                      onDeny={agentActivity.clearApproval}
+                    />
+                  )}
+                  <AgentPlanPanel
+                    planText={agentActivity.planText}
+                    workflowDraft={agentActivity.workflowDraft}
+                    pendingApproval={agentActivity.pendingApproval}
+                    workspaceId={ws}
+                    onApprovePlan={() => {
+                      const t = agentActivity.pendingApproval?.token;
+                      if (t) void runStream("Approve workflow plan.", { approval_token: t });
+                    }}
+                    onSaveWorkflow={(title) => void handleSaveWorkflow(title)}
+                  />
+                </>
+              )}
               {loadingThread && messages.length === 0 ? (
                 <p className="text-sm text-neutral-500">Loading conversation…</p>
               ) : null}
@@ -519,6 +654,11 @@ export default function ChatPage() {
                   retrievalSummary={activity.retrievalSummary}
                 />
               )}
+              {showAgentToolsPanel ? (
+                <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2">
+                  <ToolTimeline steps={agentActivity.toolSteps} />
+                </div>
+              ) : null}
             </div>
             <form onSubmit={onSend} className="flex gap-2 border-t border-neutral-200 p-4">
               <Input

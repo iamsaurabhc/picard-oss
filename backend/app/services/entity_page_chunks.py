@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,33 @@ from app.db.models import Chunk, Entity, EntityMention
 from app.schemas import SearchHit
 from app.services.excerpt_selector import has_amount_signal
 from app.services.fts_search import parse_bbox
+
+_OCR_NOISE_TOKEN_RE = re.compile(r"\b[A-Z0-9]{3,}[-/]?[A-Z0-9]{2,}\b")
+
+
+def is_substantive_chunk_text(text: str) -> bool:
+    """Reject short OCR fragments and identifier-heavy noise."""
+    t = (text or "").strip()
+    if len(t) < 40:
+        return False
+    alpha = sum(1 for c in t if c.isalpha())
+    if alpha / len(t) < 0.45:
+        return False
+    noise = len(_OCR_NOISE_TOKEN_RE.findall(t))
+    if noise >= 4 and len(t) < 220:
+        return False
+    return True
+
+
+def dedupe_hits_by_page(hits: list[SearchHit]) -> list[SearchHit]:
+    """One hit per page — keep the richest text (page-level merge wins)."""
+    by_page: dict[tuple[str, int], SearchHit] = {}
+    for h in hits:
+        key = (h.document_id, h.page_number)
+        prev = by_page.get(key)
+        if prev is None or len(h.text_content or "") > len(prev.text_content or ""):
+            by_page[key] = h
+    return sorted(by_page.values(), key=lambda x: (x.score, x.page_number))
 
 
 def chunks_from_entity_mentions(
@@ -38,6 +67,8 @@ def chunks_from_entity_mentions(
     hits: list[SearchHit] = []
     for chunk, entity_type in rows:
         if chunk.id in seen:
+            continue
+        if not is_substantive_chunk_text(chunk.text_content or ""):
             continue
         seen.add(chunk.id)
         score = -1.0 if entity_type == "amount" else 0.0

@@ -20,14 +20,23 @@ logger = logging.getLogger(__name__)
 _FACT_HINT_RE = re.compile(
     r"\b(?:"
     r"aged?|years?|old|infant|plaintiff(?:'s)?|defendant(?:'s)?|"
-    r"son|daughter|child|children|claimant|respondent|"
+    r"son|daughter|child|children|claimant|respondent|informant|"
     r"january|february|march|april|may|june|july|august|september|october|november|december|"
-    r"damages|occurred|died|injur|accident"
+    r"damages|occurred|died|injur|accident|commission|relief|penalty|contravention|filed"
     r")\b",
     re.IGNORECASE,
 )
 _AMOUNT_HINT_RE = re.compile(
-    r"(?:£|\$|€|\b\d{1,3}(?:,\d{3})+\b|\b\d+\s*(?:pounds?|gbp|usd)\b|damages?\s+(?:in\s+the\s+sum|of|claimed|sought))",
+    r"(?:£|\$|€|\b\d{1,3}(?:,\d{3})+\b|\b\d+\s*(?:pounds?|gbp|usd)\b|"
+    r"damages?\s+(?:in\s+the\s+sum|of|claimed|sought)|"
+    r"\b(?:relief|penalty|turnover|direction)\b)",
+    re.IGNORECASE,
+)
+_EXPLICIT_MONETARY_RE = re.compile(
+    r"£\s*[\d,]+(?:\.\d+)?|"
+    r"\$\s*[\d,]+(?:\.\d+)?|"
+    r"damages?\s+in\s+the\s+sum\s+of|"
+    r"\b\d{1,3}(?:,\d{3})+\s*(?:pounds?|gbp|usd)\b",
     re.IGNORECASE,
 )
 _PROPER_NAME_RE = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b")
@@ -120,6 +129,22 @@ def split_sentences(text: str) -> list[str]:
     return out
 
 
+def has_explicit_monetary_amount(text: str | None) -> bool:
+    """True when text states a concrete sum (currency literal or 'sum of' phrasing)."""
+    return bool(text and _EXPLICIT_MONETARY_RE.search(text))
+
+
+def _explicit_monetary_amount_score(sentence: str) -> int:
+    score = 0
+    if re.search(r"£|\$|€", sentence):
+        score += 25
+    if re.search(r"damages?\s+in\s+the\s+sum", sentence, re.I):
+        score += 20
+    if re.search(r"\b\d{1,3}(?:,\d{3})+\b", sentence):
+        score += 10
+    return score
+
+
 def _query_terms(question: str) -> set[str]:
     stop = {
         "the", "a", "an", "is", "are", "was", "were", "what", "who", "which",
@@ -147,9 +172,17 @@ def _score_sentence(
     if _AMOUNT_HINT_RE.search(sentence):
         score += 10 if prefer_amounts else 4
     if _LISTING_SUBSTANCE_RE.search(sentence):
-        score += 10 if prefer_listing else 2
-    if prefer_identity and (_OCR_NAME_BEFORE_INFANT_RE.search(sentence) or _IDENTITY_PHRASE_RE.search(sentence)):
+        score += 10 if prefer_listing else 5
+    if _LISTING_CAPTION_RE.search(sentence):
+        score += 8 if prefer_listing else 4
+    if prefer_identity and (
+        _OCR_NAME_BEFORE_INFANT_RE.search(sentence)
+        or _IDENTITY_PHRASE_RE.search(sentence)
+        or _IDENTITY_CLAUSE_RE.search(sentence)
+    ):
         score += 12
+    if re.search(r"\b(died|death|drown|drowned|fatal|deceased|killed|injur(?:y|ies|ed))\b", sentence, re.I):
+        score += 10 if prefer_identity else 5
     if _CITATION_HEADER_RE.match(sentence[:80]):
         score -= 4
     if question and question.casefold()[:40] in s_lower:
@@ -210,6 +243,89 @@ def focus_sentences_excerpt(
     return excerpt
 
 
+def overview_facet_excerpt(
+    text: str,
+    max_chars: int,
+    *,
+    question: str = "",
+    sub_questions: list[SubQuestion] | None = None,
+) -> str | None:
+    """Case overview: one or two best sentences per facet (parties, facts, damages, …)."""
+    sentences = split_sentences(text)
+    if not sentences:
+        return None
+    if not sub_questions:
+        return focus_sentences_excerpt(
+            text,
+            max_chars,
+            question=question,
+            prefer_amounts=True,
+            sub_questions=sub_questions,
+        )
+
+    picked: list[str] = []
+    seen: set[str] = set()
+    total = 0
+
+    for sq in sub_questions:
+        prefer_identity = sq.label in {"parties", "central_facts"}
+        prefer_amounts = sq.label == "damages"
+        q_terms = _query_terms(sq.question)
+        pool = sentences
+        if sq.label == "damages":
+            explicit_sents = [s for s in sentences if has_explicit_monetary_amount(s)]
+            amount_sents = [s for s in sentences if _AMOUNT_HINT_RE.search(s)]
+            if explicit_sents:
+                pool = explicit_sents
+            elif amount_sents:
+                pool = amount_sents
+        ranked = sorted(
+            pool,
+            key=lambda s, _sq=sq: (
+                _explicit_monetary_amount_score(s),
+                _score_sentence(
+                    s,
+                    question=_sq.question,
+                    query_terms=q_terms,
+                    prefer_amounts=prefer_amounts,
+                    prefer_listing=False,
+                    prefer_identity=prefer_identity,
+                ),
+            ),
+            reverse=True,
+        )
+        per_facet = 2 if sq.label in {
+            "parties", "central_facts", "court", "damages", "dates", "outcome",
+        } else 1
+        for sent in ranked[:per_facet]:
+            key = sent.casefold()
+            if key in seen:
+                continue
+            if total + len(sent) + 2 > max_chars and picked:
+                continue
+            picked.append(sent)
+            seen.add(key)
+            total += len(sent) + 2
+
+    if not picked:
+        return focus_sentences_excerpt(
+            text,
+            max_chars,
+            question=question,
+            prefer_amounts=True,
+            sub_questions=sub_questions,
+        )
+
+    excerpt = " ".join(picked).strip()
+    if has_explicit_monetary_amount(text) and not has_explicit_monetary_amount(excerpt):
+        anchored = _amount_anchored_excerpt(text, max(200, max_chars // 3))
+        if anchored:
+            excerpt = f"{anchored} {excerpt}".strip()
+    if len(excerpt) > max_chars:
+        excerpt = _trim_excerpt_end(excerpt, max_chars)
+    return excerpt
+
+
 def _trim_excerpt_end(excerpt: str, max_chars: int) -> str:
     if len(excerpt) <= max_chars:
         return excerpt
@@ -254,7 +370,7 @@ def _amount_anchored_excerpt(text: str, max_chars: int) -> str | None:
     cleaned = (text or "").strip().replace("\n", " ")
     if not cleaned:
         return None
-    match = _AMOUNT_HINT_RE.search(cleaned)
+    match = _EXPLICIT_MONETARY_RE.search(cleaned) or _AMOUNT_HINT_RE.search(cleaned)
     if not match:
         return None
     start = max(0, match.start() - 80)

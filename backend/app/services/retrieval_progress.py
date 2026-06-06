@@ -73,3 +73,14 @@ def consume_retrieval_generator(gen):
         if exc.value is None:
             raise RuntimeError("Retrieval generator finished without returning (hits, diagnostics)") from exc
         return events, exc.value
+
+
+def iter_retrieval_events(gen):
+    """Yield progress/snippet events as they occur; StopIteration carries (hits, diagnostics)."""
+    while True:
+        try:
+            yield next(gen)
+        except StopIteration as exc:
+            if exc.value is None:
+                raise RuntimeError("Retrieval generator finished without returning (hits, diagnostics)") from exc
+            return exc.value

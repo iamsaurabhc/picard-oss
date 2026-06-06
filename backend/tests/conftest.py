@@ -110,6 +110,7 @@ def db_engine(tmp_path, monkeypatch):
 
     run_init_sql(engine)
     Base.metadata.create_all(bind=engine)
+    run_migrations(engine)
     from app.services.workflows_store import seed_builtin_workflows
 
     seed_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)()

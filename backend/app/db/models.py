@@ -210,3 +210,34 @@ class HiddenWorkflow(Base):
 
     workflow_id: Mapped[str] = mapped_column(String, primary_key=True)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    session_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    profile: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, default="agent")
+    plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    events_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="running")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class MemorySyncLog(Base):
+    __tablename__ = "memory_sync_log"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    workspace_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True
+    )
+    mem0_user_id: Mapped[str] = mapped_column(String, nullable=False)
+    operation: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)

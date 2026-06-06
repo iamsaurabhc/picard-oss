@@ -2,7 +2,13 @@ import json
 from unittest.mock import patch
 
 from app.config import settings
-from app.services.excerpt_selector import _best_excerpt, _fallback_excerpt, select_excerpts
+from app.services.excerpt_selector import (
+    _amount_anchored_excerpt,
+    _best_excerpt,
+    _fallback_excerpt,
+    overview_facet_excerpt,
+    select_excerpts,
+)
 from app.schemas import SearchHit
 
 
@@ -51,6 +57,55 @@ def test_best_excerpt_surfaces_infant_son():
     excerpt = _best_excerpt(text, 200)
     assert "infant son" in excerpt.casefold()
     assert "ma x" in excerpt.casefold() or "chester" in excerpt.casefold()
+
+
+def test_amount_anchored_excerpt_prefers_currency_over_generic_damage():
+    text = (
+        "The injury and damage claimed in the declaration was pleaded in general. "
+        "The plaintiff claimed damages in the sum of £1,000 for nervous shock."
+    )
+    excerpt = _amount_anchored_excerpt(text, 300)
+    assert excerpt
+    assert "£1,000" in excerpt or "1,000" in excerpt
+
+
+def test_overview_facet_excerpt_prefers_explicit_amount_over_generic_damage():
+    from app.services.query_understanding import _overview_sub_questions_from_facets
+
+    text = (
+        "In the declaration the injury and damage claimed was pleaded in general terms. "
+        "Ma x Chester, the infant son of the plaintiff, fell into the drain. "
+        "The plaintiff claimed damages in the sum of £1,000."
+    )
+    excerpt = overview_facet_excerpt(
+        text,
+        1200,
+        sub_questions=_overview_sub_questions_from_facets(),
+    )
+    assert excerpt
+    assert "£1,000" in excerpt or "1,000" in excerpt
+
+
+def test_overview_facet_excerpt_keeps_victim_and_damages():
+    from app.services.query_understanding import _overview_sub_questions_from_facets
+
+    text = (
+        "Header citation v. Council of the Municipality of Waverley. "
+        "Ma x Chester, the infant son of the plaintiff, fell into the drain and received "
+        "injuries whereof he subsequently died. "
+        "The plaintiff claimed damages in the sum of £1,000. "
+        "The Full Court dismissed the appeal."
+    )
+    excerpt = overview_facet_excerpt(
+        text,
+        900,
+        sub_questions=_overview_sub_questions_from_facets(),
+    )
+    assert excerpt
+    lower = excerpt.casefold()
+    assert "infant son" in lower
+    assert "1,000" in excerpt or "£1,000" in excerpt
+    assert "died" in lower or "injur" in lower
 
 
 def test_best_excerpt_anchors_name_in_long_declaration():

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { picardApi, type WorkflowRecord, type WorkflowType } from "@/lib/picardApi";
@@ -39,6 +40,13 @@ export function WorkflowLibrary({ workspaceId }: Props) {
         type: typeFilter || undefined,
       }),
   });
+
+  const { data: appSettings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => picardApi.getSettings(),
+  });
+  const agentEditEnabled =
+    !!appSettings?.enable_agent_mode && !!appSettings?.agent_pack_installed;
 
   const selected = useMemo(
     () => workflows.find((w) => w.id === selectedId) ?? workflows[0] ?? null,
@@ -163,14 +171,25 @@ export function WorkflowLibrary({ workspaceId }: Props) {
             >
               Run
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled
-              title="Agent authoring ships in Phase 7a"
-            >
-              Edit in Agent
-            </Button>
+            {agentEditEnabled ? (
+              <Button type="button" variant="outline" asChild>
+                <Link
+                  href={`/chat?session=&mode=agent&workflow=${selected.id}`}
+                  title="Open in Agent mode to edit or extend this playbook"
+                >
+                  Edit in Agent
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                disabled
+                title="Enable Agent mode in Settings and install the agent pack"
+              >
+                Edit in Agent
+              </Button>
+            )}
             <Button
               type="button"
               variant="outline"

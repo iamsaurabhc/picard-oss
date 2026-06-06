@@ -134,7 +134,12 @@ def list_workflows(
     return out
 
 
-def create_workflow(db: Session, body: WorkflowPayload) -> dict[str, Any]:
+def create_workflow(
+    db: Session,
+    body: WorkflowPayload,
+    *,
+    source: str = "user",
+) -> dict[str, Any]:
     validation = validate_workflow_record(
         flow_json=body.flow_json.model_dump(),
         evidence_profile_json=body.evidence_profile.model_dump(),
@@ -157,7 +162,7 @@ def create_workflow(db: Session, body: WorkflowPayload) -> dict[str, Any]:
         input_schema_json=_json_dump(body.input_schema) if body.input_schema else None,
         evidence_profile_json=_json_dump(body.evidence_profile.model_dump()),
         profile=body.profile,
-        source="user",
+        source=source,
         requires_approval=1 if body.requires_approval else 0,
         is_builtin=0,
         created_at=now,

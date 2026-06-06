@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
+from app.services.lightagent_runtime import stream_agent_run
 from app.db.session import get_db
 from app.schemas import (
     ChatMessageOut,
@@ -88,13 +89,16 @@ def get_messages(session_id: str, db: Session = Depends(get_db)):
 async def chat_stream(body: ChatStreamRequest, db: Session = Depends(get_db)):
     if not settings.enable_chat:
         raise HTTPException(status_code=503, detail="Chat is disabled")
+    if body.mode == "agent" and not settings.enable_agent_mode:
+        raise HTTPException(status_code=403, detail="Agent mode is disabled")
 
     async def event_generator():
         try:
-            async for payload in stream_chat(db, body):
+            stream_fn = stream_agent_run if body.mode == "agent" else stream_chat
+            async for payload in stream_fn(db, body):
                 event = payload.pop("event")
                 yield {"event": event, "data": json.dumps(payload)}
         except ValueError as exc:
             yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(event_generator(), ping=5)
