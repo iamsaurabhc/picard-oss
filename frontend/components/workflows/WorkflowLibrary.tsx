@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { picardApi, type WorkflowRecord, type WorkflowType } from "@/lib/picardApi";
+import { isDevTestMode } from "@/lib/featureFlags";
 import { FlowDAGPanel } from "@/components/workflows/FlowDAGPanel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -46,7 +47,9 @@ export function WorkflowLibrary({ workspaceId }: Props) {
     queryFn: () => picardApi.getSettings(),
   });
   const agentEditEnabled =
-    !!appSettings?.enable_agent_mode && !!appSettings?.agent_pack_installed;
+    isDevTestMode &&
+    !!appSettings?.enable_agent_mode &&
+    !!appSettings?.agent_pack_installed;
 
   const selected = useMemo(
     () => workflows.find((w) => w.id === selectedId) ?? workflows[0] ?? null,
@@ -180,7 +183,7 @@ export function WorkflowLibrary({ workspaceId }: Props) {
                   Edit in Agent
                 </Link>
               </Button>
-            ) : (
+            ) : isDevTestMode ? (
               <Button
                 type="button"
                 variant="outline"
@@ -189,7 +192,7 @@ export function WorkflowLibrary({ workspaceId }: Props) {
               >
                 Edit in Agent
               </Button>
-            )}
+            ) : null}
             <Button
               type="button"
               variant="outline"

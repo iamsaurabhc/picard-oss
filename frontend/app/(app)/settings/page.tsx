@@ -9,6 +9,7 @@ import {
   type DesktopUpdateInfo,
 } from "@/lib/desktopUpdates";
 import { picardApi, type AppComponent, type AppSettings, type UpdateCheck } from "@/lib/picardApi";
+import { isDevTestMode } from "@/lib/featureFlags";
 import { isVersionNewer } from "@/lib/version";
 
 /** Ensure boolean settings are never undefined (avoids uncontrolled → controlled inputs). */
@@ -206,7 +207,7 @@ export default function SettingsPage() {
         </select>
       </section>
 
-      {settings.agent_pack_installed === false && (
+      {isDevTestMode && settings.agent_pack_installed === false && (
         <p className="mt-4 text-xs text-amber-800">
           Agent pack is not visible to the running API process (this is not Phase 7b — install the
           optional agent dependencies into the <strong>same Python</strong> that serves{" "}
@@ -232,9 +233,13 @@ export default function SettingsPage() {
             ["enable_slm_entity_extract", "SLM entity extraction"],
             ["enable_ner_entity_extract", "GLiNER NER (requires model)"],
             ["show_prompts_in_chat", "Show pipeline prompts in chat"],
-            ["enable_agent_mode", "Enable Agent authoring mode (Phase 7a)"],
-            ["agent_skip_scope_hitl", "Skip scope confirmation (firm)"],
-            ["mem0_store_on_run_end", "Store procedural notes after agent runs"],
+            ...(isDevTestMode
+              ? ([
+                  ["enable_agent_mode", "Enable Agent authoring mode (Phase 7a)"],
+                  ["agent_skip_scope_hitl", "Skip scope confirmation (firm)"],
+                  ["mem0_store_on_run_end", "Store procedural notes after agent runs"],
+                ] as const)
+              : []),
           ] as const
         ).map(([key, label]) => (
           <label key={key} className="flex items-center gap-2 text-sm">

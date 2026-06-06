@@ -26,6 +26,7 @@ import { ScopeConfirmBar } from "@/components/agent/ScopeConfirmBar";
 import { ToolTimeline } from "@/components/agent/ToolTimeline";
 import { useAgentActivity } from "@/components/agent/useAgentActivity";
 import { MultiHighlightPDFViewer } from "@/components/MultiHighlightPDFViewer";
+import { isDevTestMode } from "@/lib/featureFlags";
 import { cn } from "@/lib/utils";
 
 type UiMessage = {
@@ -96,7 +97,6 @@ export default function ChatPage() {
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
-  const [workflowId, setWorkflowId] = useState<string>("");
   const streamingRef = useRef(false);
   const initRef = useRef(false);
   const initInFlightRef = useRef(false);
@@ -118,16 +118,12 @@ export default function ChatPage() {
   const agentModeOn = !!appSettings?.enable_agent_mode;
   const agentPackReady = !!appSettings?.agent_pack_installed;
   const agentChatReady = agentModeOn && agentPackReady;
+  const effectiveMode: "rag" | "agent" =
+    isDevTestMode && chatMode === "agent" ? "agent" : "rag";
 
   const { data: documents } = useQuery({
     queryKey: ["documents", ws],
     queryFn: () => picardApi.listDocuments(ws!),
-    enabled: !!ws,
-  });
-
-  const { data: assistantWorkflows = [] } = useQuery({
-    queryKey: ["workflows", ws, "assistant"],
-    queryFn: () => picardApi.listWorkflows({ workspace_id: ws!, type: "assistant" }),
     enabled: !!ws,
   });
 
@@ -324,11 +320,11 @@ export default function ChatPage() {
   const showActivityPanel =
     streaming || activity.steps.length > 0;
   const showAgentToolsPanel =
-    chatMode === "agent" &&
+    effectiveMode === "agent" &&
     (agentActivity.toolSteps.length > 0 || !!agentActivity.workflowDraft);
 
   useEffect(() => {
-    if (modeParam === "agent" && agentChatReady) setChatMode("agent");
+    if (modeParam === "agent" && agentChatReady && isDevTestMode) setChatMode("agent");
   }, [modeParam, agentChatReady]);
 
   const runStream = async (
@@ -349,7 +345,7 @@ export default function ChatPage() {
       ) {
         activity.ingestEvent(ev);
       }
-      if (chatMode === "agent") {
+      if (effectiveMode === "agent") {
         agentActivity.ingestEvent(ev);
       }
       if (ev.event === "content" && "delta" in ev) {
@@ -376,9 +372,8 @@ export default function ChatPage() {
       session_id: sessionId!,
       workspace_id: ws!,
       message,
-      mode: chatMode,
+      mode: effectiveMode,
       document_ids: documentIds.length ? documentIds : undefined,
-      workflow_id: workflowId || undefined,
       approval_token: extra?.approval_token,
     })) {
       const errMsg =
@@ -410,7 +405,7 @@ export default function ChatPage() {
     streamingRef.current = true;
     activity.reset();
     activity.start();
-    if (chatMode === "agent") {
+    if (effectiveMode === "agent") {
       agentActivity.reset();
     }
 
@@ -495,9 +490,9 @@ export default function ChatPage() {
           className="shrink-0 font-serif text-2xl"
           style={{ fontFamily: "var(--font-garamond), serif" }}
         >
-          {chatMode === "agent" ? "Agent" : "Chat"}
+          {effectiveMode === "agent" ? "Agent" : "Chat"}
         </h1>
-        {agentModeOn ? (
+        {isDevTestMode && agentModeOn ? (
           <span
             title={
               agentPackReady
@@ -521,19 +516,6 @@ export default function ChatPage() {
           selectedIds={scopedDocumentIds}
           onChange={setDocumentIds}
         />
-        <select
-          className="max-w-xs rounded border border-neutral-300 px-2 py-1.5 text-sm"
-          value={workflowId}
-          onChange={(e) => setWorkflowId(e.target.value)}
-          title="Optional assistant workflow — pins retrieval intent and system guidance"
-        >
-          <option value="">No workflow</option>
-          {assistantWorkflows.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.title}
-            </option>
-          ))}
-        </select>
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">
@@ -570,7 +552,7 @@ export default function ChatPage() {
         >
           <div className="flex flex-col overflow-hidden">
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
-              {chatMode === "agent" && (
+              {effectiveMode === "agent" && (
                 <>
                   <MemoryHitChip memories={agentActivity.memories} />
                   {agentActivity.pendingApproval?.kind === "scope" && (
