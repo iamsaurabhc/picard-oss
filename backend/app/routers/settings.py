@@ -32,6 +32,7 @@ class SettingsOut(BaseModel):
     enable_context_ranker: bool
     enable_excerpt_selector: bool
     enable_carp: bool
+    chat_latency_profile: str
     enable_ner_entity_extract: bool
     enable_slm_entity_extract: bool
     liteparse_ocr_server_url: str | None
@@ -67,6 +68,7 @@ class SettingsUpdate(BaseModel):
     enable_context_ranker: bool | None = None
     enable_excerpt_selector: bool | None = None
     enable_carp: bool | None = None
+    chat_latency_profile: str | None = None
     enable_ner_entity_extract: bool | None = None
     enable_slm_entity_extract: bool | None = None
     liteparse_ocr_server_url: str | None = None
@@ -106,6 +108,7 @@ def _settings_to_out(s: Settings) -> SettingsOut:
         enable_context_ranker=s.enable_context_ranker,
         enable_excerpt_selector=s.enable_excerpt_selector,
         enable_carp=s.enable_carp,
+        chat_latency_profile=s.chat_latency_profile,
         enable_ner_entity_extract=s.enable_ner_entity_extract,
         enable_slm_entity_extract=s.enable_slm_entity_extract,
         liteparse_ocr_server_url=s.liteparse_ocr_server_url,

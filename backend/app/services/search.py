@@ -173,7 +173,7 @@ def _planned_search(
 def execute_search(
     db: Session,
     body: SearchRequest,
-    *,
+    understanding=None,
     max_chunks_per_doc: int | None = None,
 ) -> SearchResponse:
     scoped_docs = _validate_scope(db, body.workspace_id, body.document_ids)
@@ -189,13 +189,14 @@ def execute_search(
             suggestions=["No documents match metadata filters."],
         )
 
-    understanding = understand_query(
-        body.query,
-        retrieval_mode=body.retrieval_mode,
-        db=db,
-        workspace_id=body.workspace_id,
-        document_ids=filtered_docs,
-    )
+    if understanding is None:
+        understanding = understand_query(
+            body.query,
+            retrieval_mode=body.retrieval_mode,
+            db=db,
+            workspace_id=body.workspace_id,
+            document_ids=filtered_docs,
+        )
     planner = plan_query(body.query, retrieval_mode=body.retrieval_mode, understanding=understanding)
     fts_match = build_fts_match_string(understanding.fts, raw_query_fallback=body.query)
     diagnostics: dict = {"understanding": understanding_summary(understanding), "fts_query": fts_match}
@@ -278,6 +279,29 @@ def execute_search(
             "fallback_reason": "carp_refused",
             "carp_refused": True,
         }
+        intersection_pages = int(
+            (carp_result.retrieval_diagnostics or {}).get("intersection_pages") or 0
+        )
+        allow_partial = (
+            settings.carp_allow_partial_disclosure
+            if body.allow_partial_disclosure is None
+            else body.allow_partial_disclosure
+        )
+        if intersection_pages == 0 and not allow_partial:
+            return SearchResponse(
+                mode="MULTI_CONSTRAINT",
+                hits=[],
+                bundles=[],
+                refused=True,
+                proximity_tier_used=carp_result.proximity_tier_used,
+                retrieval_diagnostics={
+                    **fallback_diag,
+                    "retrieval_path": ["carp"],
+                },
+                suggestions=carp_result.suggestions,
+                expanded_query=fts_match,
+            )
+
         simple_result = _planned_search(
             db,
             body=body,

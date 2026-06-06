@@ -112,6 +112,16 @@ def main() -> int:
         help="Re-enqueue full PDF parse (chunks + FTS + entities + embeddings)",
     )
     parser.add_argument(
+        "--vec-index",
+        action="store_true",
+        help="Rebuild page_embeddings from chunk_embeddings (no re-embed)",
+    )
+    parser.add_argument(
+        "--vec-ann",
+        action="store_true",
+        help="Populate sqlite-vec chunk_vectors + page_vectors ANN from existing BLOBs",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="List documents that would be processed, then exit",
@@ -156,6 +166,45 @@ def main() -> int:
             print(f"Would process {len(docs)} document(s)")
             return 0
 
+        if args.vec_index:
+            from app.services.page_embeddings import backfill_page_embeddings_from_chunks
+
+            total_pages = 0
+            for doc in docs:
+                n = backfill_page_embeddings_from_chunks(db, doc.id)
+                db.commit()
+                total_pages += n
+                print(f"  {doc.id}: {n} page vectors")
+            print(f"Done: {total_pages} page embeddings")
+            return 0
+
+        if args.vec_ann:
+            from app.services.sqlite_vec import (
+                backfill_chunk_vectors_from_blobs,
+                backfill_page_vectors_from_blobs,
+                vec_backend_name,
+            )
+
+            backend = vec_backend_name()
+            if backend == "blob-scan":
+                print(
+                    "sqlite-vec ANN unavailable. Install: pip install apsw sqlite-vec",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"Using vector backend: {backend}")
+            chunk_total = 0
+            page_total = 0
+            for doc in docs:
+                c = backfill_chunk_vectors_from_blobs(db, doc.id)
+                p = backfill_page_vectors_from_blobs(db, doc.id)
+                db.commit()
+                chunk_total += c
+                page_total += p
+                print(f"  {doc.id}: chunk_ann={c} page_ann={p}")
+            print(f"Done: chunk_vectors={chunk_total}, page_vectors={page_total}")
+            return 0
+
         if args.reparse:
             print(f"Re-parsing {len(docs)} document(s) (async jobs)...")
             for doc in docs:
@@ -186,7 +235,7 @@ def main() -> int:
             else:
                 total_chunks += count
                 print(f"  {doc.id} ({doc.file_name}): {count} chunks")
-        print(f"Done: {total_chunks} chunk embeddings across {len(docs) - skipped} documents")
+        print(f"Done: {total_chunks} chunk embeddings (+ page vectors) across {len(docs) - skipped} documents")
         if skipped:
             print(f"Skipped {skipped} document(s) with no indexed chunks")
         return 0 if total_chunks > 0 or not docs else 1

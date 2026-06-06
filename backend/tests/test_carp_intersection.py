@@ -9,11 +9,11 @@ from tests.corpus_constants import CARP_INTERSECTION_PAGE, DOCUMENT_ID, WORKSPAC
 def test_carp_intersection_page_3(corpus_session):
     constraints = [
         Constraint("party", "supreme court", ["Supreme Court"]),
-        Constraint("identifier", "refused", ["refused"]),
+        Constraint("party", "the plaintiff", ["The plaintiff"]),
     ]
     result = run_carp(
         corpus_session,
-        query="case context supreme court refused",
+        query="case context supreme court plaintiff damages",
         workspace_id=WORKSPACE_ID,
         constraints=constraints,
         document_ids=[DOCUMENT_ID],

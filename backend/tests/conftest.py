@@ -79,6 +79,7 @@ def corpus_client(corpus_engine, monkeypatch):
     monkeypatch.setattr("app.main.init_db", lambda: None)
     monkeypatch.setattr("app.config.settings.enable_llm_query_understanding", False)
     monkeypatch.setattr("app.config.settings.enable_context_ranker", False)
+    monkeypatch.setattr("app.config.settings.enable_hybrid_search", False)
 
     with TestClient(app) as c:
         yield c

@@ -24,8 +24,6 @@ def _run_agent_stream(db, body, fake_stream):
         patch.object(la, "stream_chat", fake_stream),
         patch.object(la, "append_events"),
         patch.object(la, "finish_agent_run"),
-        patch.object(la, "_persist_message"),
-        patch.object(la, "_touch_session_after_user_turn"),
         patch.object(la, "PicardMemory") as mock_mem,
     ):
         mock_mem.return_value.retrieve.return_value = []

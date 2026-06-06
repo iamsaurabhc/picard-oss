@@ -124,7 +124,7 @@ def test_rank_pages_caps_large_documents(db_session):
             resolved_canonicals=[canonical],
         ),
     )
-    candidates = candidate_pages_for_document(
+    candidates, _fts = candidate_pages_for_document(
         db_session,
         workspace_id=ws.id,
         document_id=doc_id,

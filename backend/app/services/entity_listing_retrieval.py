@@ -180,6 +180,8 @@ def entity_listing_retrieve_with_progress(
         yield progress.progress("search", "done", label="fallback_planned_passes", hit_count=len(fallback))
 
     for doc_id, _mention_count in doc_rows:
+        if len(pool) >= settings.chat_listing_pool_k:
+            break
         doc_name = progress.doc_names.get(doc_id, doc_id)
         yield progress.progress(
             "search",

@@ -128,6 +128,7 @@ def test_ab01_refuse_no_llm_tokens(corpus_client, monkeypatch):
     monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
+    monkeypatch.setattr(settings, "chat_latency_profile", "quality")
 
     session_r = corpus_client.post("/chat/sessions", json={"workspace_id": WORKSPACE_ID})
     session_id = session_r.json()["id"]
@@ -184,6 +185,8 @@ def test_chat_stream_mock_llm(client, chat_session, monkeypatch):
             next(e for e in event_types if e == "progress")
         )
         assert progress_before_retrieval
+        retrieval_ev = next(e for e in events if e["event"] == "retrieval")
+        assert "latency_ms" in (retrieval_ev.get("diagnostics") or {})
 
 
 @pytest.mark.corpus
@@ -194,6 +197,7 @@ def test_chat_stream_progress_snippets(corpus_client, monkeypatch):
     monkeypatch.setattr("app.services.citation_kernel.stream_completion", fake_stream)
     monkeypatch.setattr(settings, "enable_llm_query_understanding", False)
     monkeypatch.setattr(settings, "enable_context_ranker", False)
+    monkeypatch.setattr(settings, "chat_latency_profile", "quality")
 
     session_r = corpus_client.post("/chat/sessions", json={"workspace_id": WORKSPACE_ID})
     session_id = session_r.json()["id"]

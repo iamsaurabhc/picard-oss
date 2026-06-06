@@ -77,6 +77,7 @@ export type AppSettings = {
   enable_context_ranker: boolean;
   enable_excerpt_selector: boolean;
   enable_carp: boolean;
+  chat_latency_profile: string;
   enable_ner_entity_extract: boolean;
   enable_slm_entity_extract: boolean;
   liteparse_ocr_server_url: string | null;
@@ -112,6 +113,7 @@ export type AppSettingsUpdate = {
   enable_context_ranker?: boolean;
   enable_excerpt_selector?: boolean;
   enable_carp?: boolean;
+  chat_latency_profile?: string;
   enable_ner_entity_extract?: boolean;
   enable_slm_entity_extract?: boolean;
   liteparse_ocr_server_url?: string | null;

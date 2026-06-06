@@ -16,3 +16,5 @@ cryptography>=42.0.0
 packaging>=24.0
 # Optional: local embeddings for ENABLE_HYBRID_SEARCH=true
 fastembed>=0.3.0
+sqlite-vec>=0.1.6
+apsw>=3.45.0

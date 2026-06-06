@@ -24,10 +24,19 @@ engine = create_engine(
 
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
+    from app.services.sqlite_vec import _probe_vec_backend
+
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
+    try_load = getattr(dbapi_connection, "load_extension", None)
+    if callable(try_load):
+        from app.services.sqlite_vec import try_load_sqlite_vec
+
+        try_load_sqlite_vec(dbapi_connection)
+    else:
+        _probe_vec_backend()
 
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)

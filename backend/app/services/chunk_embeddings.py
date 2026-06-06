@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+import math
 import struct
+from pathlib import Path
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import Chunk, ChunkEmbedding
+from app.db.models import Chunk, ChunkEmbedding, Document
 from app.db.session import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -176,6 +178,13 @@ def embed_texts(texts: list[str]) -> list[list[float]] | None:
         return None
 
 
+def l2_normalize(vec: list[float]) -> list[float]:
+    norm = math.sqrt(sum(x * x for x in vec))
+    if norm <= 0:
+        return vec
+    return [x / norm for x in vec]
+
+
 def embedding_to_blob(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
@@ -220,7 +229,18 @@ def index_chunks_for_document(
     model_id = settings.embedding_model_id
     dims = len(vectors[0])
     now = utc_now_iso()
-    for (chunk_id, _), vec in zip(chunk_rows, vectors):
+    doc = db.get(Document, document_id)
+    workspace_id = doc.workspace_id if doc else None
+    chunk_vector_rows: list[tuple[str, int, list[float]]] = []
+    page_numbers = db.execute(
+        select(Chunk.id, Chunk.page_number).where(
+            Chunk.id.in_([c[0] for c in chunk_rows])
+        )
+    ).all()
+    page_by_chunk = {r[0]: int(r[1]) for r in page_numbers}
+
+    for (chunk_id, _), raw_vec in zip(chunk_rows, vectors):
+        vec = l2_normalize(raw_vec)
         db.add(
             ChunkEmbedding(
                 chunk_id=chunk_id,
@@ -231,7 +251,41 @@ def index_chunks_for_document(
                 created_at=now,
             )
         )
+        chunk_vector_rows.append((chunk_id, page_by_chunk.get(chunk_id, 1), vec))
+
+    from app.services.page_embeddings import upsert_page_embeddings_for_document
+
+    upsert_page_embeddings_for_document(
+        db,
+        document_id,
+        chunk_vectors=chunk_vector_rows,
+        workspace_id=workspace_id,
+    )
     db.commit()
+
+    from app.services.page_embeddings import _mean_pool
+    from app.services.sqlite_vec import (
+        delete_chunk_vectors_for_document,
+        delete_page_vectors_for_document,
+        upsert_chunk_vectors,
+        upsert_page_vectors,
+    )
+
+    delete_chunk_vectors_for_document(db, document_id)
+    delete_page_vectors_for_document(db, document_id)
+    upsert_chunk_vectors(
+        db,
+        rows=[(cid, document_id, vec) for cid, _page, vec in chunk_vector_rows],
+    )
+    by_page: dict[int, list[list[float]]] = {}
+    for _cid, page, vec in chunk_vector_rows:
+        by_page.setdefault(int(page), []).append(vec)
+    page_vec_rows = [
+        (document_id, page, pooled)
+        for page, vecs in by_page.items()
+        if (pooled := _mean_pool(vecs))
+    ]
+    upsert_page_vectors(db, rows=page_vec_rows)
     return len(vectors)
 
 
@@ -249,9 +303,4 @@ def index_document_after_parse(db: Session, document_id: str) -> int:
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     if len(a) != len(b) or not a:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+    return sum(x * y for x, y in zip(a, b))

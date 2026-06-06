@@ -86,8 +86,20 @@ def _page_entity_mention_scores(
     return {int(row[0]): int(row[1] or 0) for row in db.execute(stmt).all()}
 
 
-def _page_preview(db: Session, document_id: str, page_number: int, *, max_chars: int = 400) -> str:
+def _load_page_chunks_cached(db: Session, document_id: str, page_number: int):
+    from app.services.retrieval_context import get_retrieval_context
+
+    key = (document_id, page_number)
+    ctx = get_retrieval_context()
+    if key in ctx.page_chunk_cache:
+        return ctx.page_chunk_cache[key]
     chunks = _load_page_chunks(db, document_id, page_number)
+    ctx.page_chunk_cache[key] = chunks
+    return chunks
+
+
+def _page_preview(db: Session, document_id: str, page_number: int, *, max_chars: int = 400) -> str:
+    chunks = _load_page_chunks_cached(db, document_id, page_number)
     text = " ".join((c.text_content or "").strip() for c in chunks if c.text_content)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_chars]
@@ -150,7 +162,7 @@ def candidate_pages_for_document(
     understanding: QueryUnderstanding,
     query: str,
     canonicals: list[str] | None = None,
-) -> set[int]:
+) -> tuple[set[int], dict[int, float]]:
     """Union of entity-index, FTS/hybrid, and identifier pages for one document."""
     party_canonicals = canonicals or party_canonicals_from_understanding(understanding)
     pages: set[int] = set()
@@ -192,7 +204,7 @@ def candidate_pages_for_document(
         doc = db.get(Document, document_id)
         if doc and doc.page_count and doc.page_count <= 3:
             pages = set(range(1, int(doc.page_count) + 1))
-    return pages
+    return pages, fts_scores
 
 
 def _facet_entity_pages_for_document(
@@ -233,6 +245,7 @@ def rank_pages_for_listing(
     agent_deep: bool = False,
     max_pages_per_doc: int | None = None,
     vector_page_scores_map: dict[int, float] | None = None,
+    fts_by_page: dict[int, float] | None = None,
 ) -> list[ScoredPage]:
     """Score and order candidate pages; cap when document is large."""
     if not pages:
@@ -242,14 +255,15 @@ def rank_pages_for_listing(
     mention_scores = _page_entity_mention_scores(
         db, workspace_id, document_id, party_canonicals,
     )
-    fts_by_page = _fts_page_scores(
-        db,
-        workspace_id=workspace_id,
-        document_id=document_id,
-        query=query,
-        understanding=understanding,
-        page_hint=pages,
-    )
+    if fts_by_page is None:
+        fts_by_page = _fts_page_scores(
+            db,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            query=query,
+            understanding=understanding,
+            page_hint=pages,
+        )
 
     co_occurring: set[int] = set()
     per_party = _per_party_canonicals(party_canonicals)
@@ -348,7 +362,7 @@ def hits_from_ranked_pages(
     cap = max_chars_per_page or settings.listing_max_chars_per_page
     hits: list[SearchHit] = []
     for sp in ranked_pages:
-        page_chunks = _load_page_chunks(db, document_id, sp.page_number)
+        page_chunks = _load_page_chunks_cached(db, document_id, sp.page_number)
         if not page_chunks:
             continue
         primary = best_representative_chunk(page_chunks) or page_chunks[0]
@@ -381,13 +395,39 @@ def retrieve_listing_page_hits(
 ) -> tuple[list[SearchHit], dict]:
     """Full pipeline: discover pages → rank → load page-level hits."""
     party_canonicals = canonicals or party_canonicals_from_understanding(understanding)
-    candidates = candidate_pages_for_document(
+    candidates, fts_by_page = candidate_pages_for_document(
         db,
         workspace_id=workspace_id,
         document_id=document_id,
         understanding=understanding,
         query=query,
         canonicals=party_canonicals,
+    )
+    from app.services.hybrid_search import fuse_page_scores_rrf, vector_page_scores
+    from app.services.latency_profile import resolve_latency_profile
+
+    vector_scores: dict[int, float] = {}
+    if not resolve_latency_profile().defer_page_vectors:
+        vec_queries = [query] + [
+            sq.question for sq in (understanding.sub_questions or [])
+        ]
+        if settings.chat_latency_profile.strip().lower() in {"balanced", "fast"}:
+            vec_queries = vec_queries[:3]
+        vector_scores = vector_page_scores(
+            db,
+            queries=vec_queries,
+            workspace_id=workspace_id,
+            document_ids=[document_id],
+            top_k_per_query=settings.listing_max_pages_per_doc,
+            fts_page_scores=fts_by_page,
+        )
+    fused_scores = (
+        fuse_page_scores_rrf(
+            {p: s * 10.0 for p, s in fts_by_page.items()},
+            vector_scores,
+        )
+        if vector_scores
+        else None
     )
     ranked = rank_pages_for_listing(
         db,
@@ -399,6 +439,8 @@ def retrieve_listing_page_hits(
         canonicals=party_canonicals,
         agent_deep=agent_deep,
         max_pages_per_doc=max_pages_per_doc,
+        vector_page_scores_map=fused_scores,
+        fts_by_page=fts_by_page,
     )
     hits = hits_from_ranked_pages(db, document_id, ranked)
     diag = {
@@ -424,7 +466,7 @@ def retrieve_overview_page_hits(
     party_canonicals = party_canonicals_from_understanding(understanding)
     party_scoped = bool(party_canonicals)
 
-    pages = candidate_pages_for_document(
+    pages, fts_by_page = candidate_pages_for_document(
         db,
         workspace_id=workspace_id,
         document_id=document_id,
@@ -437,13 +479,21 @@ def retrieve_overview_page_hits(
     vec_queries = [query]
     for sq in understanding.sub_questions or []:
         vec_queries.append(sq.question)
-    vector_scores = vector_page_scores(
-        db,
-        queries=vec_queries,
-        workspace_id=workspace_id,
-        document_ids=[document_id],
-        top_k_per_query=6,
-    )
+    profile = settings.chat_latency_profile.strip().lower()
+    if profile in {"balanced", "fast"}:
+        vec_queries = vec_queries[:3]
+    from app.services.latency_profile import resolve_latency_profile
+
+    vector_scores: dict[int, float] = {}
+    if not resolve_latency_profile(profile).defer_page_vectors:
+        vector_scores = vector_page_scores(
+            db,
+            queries=vec_queries,
+            workspace_id=workspace_id,
+            document_ids=[document_id],
+            top_k_per_query=6,
+            fts_page_scores=fts_by_page,
+        )
     pages |= set(vector_scores.keys())
 
     doc = db.get(Document, document_id)
@@ -457,14 +507,6 @@ def retrieve_overview_page_hits(
     if not pages:
         pages = {1}
 
-    fts_by_page = _fts_page_scores(
-        db,
-        workspace_id=workspace_id,
-        document_id=document_id,
-        query=query,
-        understanding=understanding,
-        page_hint=pages,
-    )
     fused_page_scores = fuse_page_scores_rrf(
         {p: s * 10.0 for p, s in fts_by_page.items()},
         vector_scores,
@@ -486,6 +528,7 @@ def retrieve_overview_page_hits(
         canonicals=party_canonicals,
         max_pages_per_doc=max_pages,
         vector_page_scores_map=fused_page_scores,
+        fts_by_page=fts_by_page,
     )
     hits = hits_from_ranked_pages(db, document_id, ranked)
     selected_pages = {h.page_number for h in hits}
@@ -566,7 +609,7 @@ def cross_page_reference_hits(
     for fh in fts_hits:
         if fh.page_number in existing_pages:
             continue
-        page_chunks = _load_page_chunks(db, document_id, fh.page_number)
+        page_chunks = _load_page_chunks_cached(db, document_id, fh.page_number)
         if not page_chunks:
             continue
         primary = page_chunks[0]

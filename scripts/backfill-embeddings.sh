@@ -7,6 +7,6 @@ if [[ -f .venv/bin/activate ]]; then
   # shellcheck source=/dev/null
   source .venv/bin/activate
 fi
-pip install -q fastembed
+pip install -q fastembed apsw sqlite-vec
 python scripts/download_embedding_model.py
 python scripts/backfill_embeddings.py "$@"

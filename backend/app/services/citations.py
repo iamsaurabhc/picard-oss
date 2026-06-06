@@ -130,9 +130,14 @@ def build_citation_map(
         unique_hits.append(hit)
 
     use_focus = _use_focus_for_intent(intent, prefer_listing=prefer_listing, page_level=page_level)
+    skip_slm_excerpts = page_level and (
+        prefer_listing
+        or (intent == "entity_matter_listing" and settings.listing_disable_focus_excerpts)
+    )
     if page_level:
         overview_focus = intent == "case_overview"
         excerpts: dict[str, str] = {}
+        slm_hits: list[SearchHit] = []
         for h in unique_hits:
             text = h.text_content or ""
             prefer_amounts_here = prefer_amounts or overview_focus
@@ -148,19 +153,27 @@ def build_citation_map(
             )
             if focused:
                 excerpts[h.chunk_id] = focused
+            elif skip_slm_excerpts or not settings.enable_excerpt_selector:
+                excerpts[h.chunk_id] = _fallback_excerpt(text, excerpt_chars)
             else:
-                excerpts[h.chunk_id] = select_excerpts(
-                    [h],
-                    question=question,
-                    sub_questions=sub_questions,
-                    max_chars=excerpt_chars,
-                    prefer_amounts=prefer_amounts_here,
-                    prefer_listing=prefer_listing,
-                    intent=intent,
-                    coverage_goal=coverage_goal,
-                    db=db,
-                    workspace_id=workspace_id,
-                ).get(h.chunk_id) or _fallback_excerpt(text, excerpt_chars)
+                slm_hits.append(h)
+        if slm_hits:
+            batched = select_excerpts(
+                slm_hits,
+                question=question,
+                sub_questions=sub_questions,
+                max_chars=excerpt_chars,
+                prefer_amounts=prefer_amounts or overview_focus,
+                prefer_listing=prefer_listing,
+                intent=intent,
+                coverage_goal=coverage_goal,
+                db=db,
+                workspace_id=workspace_id,
+            )
+            for h in slm_hits:
+                excerpts[h.chunk_id] = batched.get(h.chunk_id) or _fallback_excerpt(
+                    h.text_content or "", excerpt_chars,
+                )
     else:
         excerpts = select_excerpts(
             unique_hits,

@@ -335,6 +335,23 @@ export default function ChatPage() {
     let refs: ChatReference[] = [];
     let refused = false;
     let suggestions: string[] = [];
+    let streamBuffer = "";
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const flushStreamBuffer = () => {
+      if (!streamBuffer) return;
+      assistant += streamBuffer;
+      streamBuffer = "";
+      setMessages((m) => upsertAssistantMessage(m, assistant));
+    };
+
+    const scheduleFlush = () => {
+      if (flushTimer) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        flushStreamBuffer();
+      }, 75);
+    };
 
     const ingestStreamEvent = (ev: ChatStreamEvent) => {
       if (
@@ -349,9 +366,14 @@ export default function ChatPage() {
         agentActivity.ingestEvent(ev);
       }
       if (ev.event === "content" && "delta" in ev) {
-        assistant += ev.delta;
-        setMessages((m) => upsertAssistantMessage(m, assistant));
+        streamBuffer += ev.delta;
+        scheduleFlush();
       } else if (ev.event === "references") {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        flushStreamBuffer();
         refs = ev.references ?? [];
         if (typeof ev.content === "string" && ev.content.length > 0) {
           assistant = ev.content;
@@ -383,6 +405,10 @@ export default function ChatPage() {
       if (errMsg) throw new Error(String(errMsg));
       ingestStreamEvent(ev);
     }
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+    }
+    flushStreamBuffer();
     setMessages((m) =>
       upsertAssistantMessage(m, assistant, {
         references: refused ? undefined : refs,
@@ -390,9 +416,7 @@ export default function ChatPage() {
         suggestions: refused ? suggestions : undefined,
       })
     );
-    await queryClient.invalidateQueries({ queryKey: ["chat-sessions", ws] });
-    const hist = await picardApi.listChatMessages(sessionId!);
-    setMessages(dedupeHistoryMessages(hist.map(mapHistoryMessage)));
+    void queryClient.invalidateQueries({ queryKey: ["chat-sessions", ws] });
   };
 
   const onSend = async (e: React.FormEvent) => {
@@ -400,7 +424,7 @@ export default function ChatPage() {
     if (!sessionId || !ws || !input.trim() || streaming) return;
     const userText = input.trim();
     setInput("");
-    setMessages((m) => [...m, { role: "user", content: userText }]);
+    setMessages((m) => [...m, { role: "user", content: userText }, { role: "assistant", content: "" }]);
     setStreaming(true);
     streamingRef.current = true;
     activity.reset();

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -12,6 +13,7 @@ from app.db.models import ChatMessage, ChatSession, Document
 from app.db.session import utc_now_iso
 from app.schemas import ChatSessionOut, ChatSessionSummary, ChatSessionUpdate, ChatStreamRequest, SearchHit, SearchRequest
 from app.services.case_scoping import resolve_case_document_ids
+from app.services.chat_latency import ChatLatencyTracker
 from app.services.citation_kernel import (
     REFUSAL_MESSAGE,
     apply_prompt_overlays,
@@ -21,6 +23,8 @@ from app.services.citation_kernel import (
 )
 from app.services.citations import refuse_gate
 from app.services.entity_listing_retrieval import entity_listing_retrieve_with_progress
+from app.services.fast_retrieval import fast_retrieve_for_chat
+from app.services.latency_profile import apply_latency_profile
 from app.services.listing_map_reduce import (
     run_listing_map_reduce_with_progress,
     should_use_listing_map_reduce,
@@ -28,6 +32,7 @@ from app.services.listing_map_reduce import (
 from app.services.excerpt_selector import has_amount_signal
 from app.services.overview_retrieval import overview_retrieve_with_progress
 from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retrieve_with_progress
+from app.services.retrieval_context import clear_retrieval_context, reset_retrieval_context
 from app.services.query_understanding import understand_query, understanding_summary, _case_name_terms
 from app.services.retrieval_progress import RetrievalProgressEmitter
 from app.services.search import execute_search
@@ -270,6 +275,31 @@ def _emit_carp_snippets(
 
 
 async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dict]:
+    reset_retrieval_context()
+    latency = ChatLatencyTracker()
+    try:
+        async for ev in _stream_chat_impl(db, body, latency):
+            yield ev
+    finally:
+        clear_retrieval_context()
+
+
+async def _stream_chat_impl(
+    db: Session,
+    body: ChatStreamRequest,
+    latency: ChatLatencyTracker,
+) -> AsyncIterator[dict]:
+    with apply_latency_profile(settings.chat_latency_profile) as profile_flags:
+        async for ev in _stream_chat_body(db, body, latency, profile_flags):
+            yield ev
+
+
+async def _stream_chat_body(
+    db: Session,
+    body: ChatStreamRequest,
+    latency: ChatLatencyTracker,
+    profile_flags,
+) -> AsyncIterator[dict]:
     session = db.get(ChatSession, body.session_id)
     if not session:
         raise ValueError("Session not found")
@@ -299,13 +329,15 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
 
     yield emitter.progress("understanding", "start")
 
-    understanding = understand_query(
-        body.message,
-        retrieval_mode=body.retrieval_mode,
-        db=db,
-        workspace_id=body.workspace_id,
-        document_ids=body.document_ids,
-    )
+    with latency.phase("understanding"):
+        understanding = await asyncio.to_thread(
+            understand_query,
+            body.message,
+            retrieval_mode=body.retrieval_mode,
+            db=db,
+            workspace_id=body.workspace_id,
+            document_ids=body.document_ids,
+        )
     if workflow_id:
         from app.services.workflows_store import (
             apply_workflow_intent_hint,
@@ -369,10 +401,45 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     suggestions: list[str] = []
     refused = False
     hits: list[SearchHit] = []
+    carp_refused_empty = False
     listing_map_result: dict | None = None
+    citation_map = None
+    system_prompt: str | None = None
     scoped_document_ids = list(body.document_ids) if body.document_ids else None
+    use_fast_tier = (
+        profile_flags.use_fast_tier_synthesis
+        and body.mode != "agent"
+        and body.retrieval_mode in ("simple", "auto")
+        and not is_listing
+        and not is_overview
+        and not _use_carp(body, understanding)
+    )
+    fast_citation_map = None
+    fast_system_prompt = None
 
-    if is_overview:
+    if use_fast_tier:
+        with latency.phase("retrieval"):
+            fast_hits, fast_citation_map, fast_system_prompt, fast_diag = await asyncio.to_thread(
+                fast_retrieve_for_chat,
+                db,
+                query=body.message,
+                understanding=understanding,
+                workspace_id=body.workspace_id,
+                document_ids=body.document_ids,
+            )
+        if fast_hits and fast_citation_map and fast_system_prompt:
+            retrieval_diagnostics["fast_tier"] = fast_diag
+            retrieval_diagnostics["retrieval_phase"] = "fast"
+            hits = fast_hits
+            top_k = len(fast_hits)
+            rank_mode = "precision"
+            refused = False
+            search_mode = "FAST"
+            yield emitter.progress("search", "done", strategy="fast_tier", hit_count=len(hits))
+        else:
+            use_fast_tier = False
+
+    if is_overview and not use_fast_tier:
         case_terms = _case_name_terms(body.message) or understanding.fts.must_terms[:2]
         if case_terms:
             resolved = resolve_case_document_ids(
@@ -385,7 +452,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
                 scoped_document_ids = resolved
                 retrieval_diagnostics["case_document_scope"] = resolved
 
-    if _use_carp(body, understanding):
+    if not use_fast_tier and _use_carp(body, understanding):
         pool_k = body.top_k if body.top_k > settings.chat_top_k else settings.chat_retrieval_pool_k
         search_body = SearchRequest(
             query=body.message,
@@ -402,10 +469,12 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             strategy="carp",
             constraint_count=constraint_count,
         )
-        search_result = execute_search(
+        search_result = await asyncio.to_thread(
+            execute_search,
             db,
             search_body,
-            max_chunks_per_doc=settings.chat_max_chunks_per_doc,
+            understanding,
+            settings.chat_max_chunks_per_doc,
         )
         hits = search_result.hits
         top_k = settings.chat_top_k
@@ -413,6 +482,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         search_mode = search_result.mode
         bundles = search_result.bundles
         refused = search_result.refused
+        carp_refused_empty = refused and len(hits) == 0
         suggestions = search_result.suggestions or []
         retrieval_diagnostics.update(search_result.retrieval_diagnostics or {})
         carp_diag = search_result.retrieval_diagnostics or {}
@@ -426,7 +496,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         for ev in _emit_carp_snippets(emitter, hits):
             yield ev
         yield emitter.progress("search", "done", strategy="carp", hit_count=len(hits))
-    elif is_listing:
+    elif not use_fast_tier and is_listing:
         listing_discovery_limit = (
             agent_policy.discovery_limit if agent_policy else None
         )
@@ -483,7 +553,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             top_k = settings.chat_listing_top_k
             rank_mode = "listing"
             refused = len(hits) == 0
-    elif is_overview:
+    elif not use_fast_tier and is_overview:
         gen = overview_retrieve_with_progress(
             db,
             understanding,
@@ -502,7 +572,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         top_k = settings.chat_overview_top_k
         rank_mode = "coverage"
         refused = len(hits) == 0
-    else:
+    elif not use_fast_tier:
         pool_k = body.top_k if body.top_k > settings.chat_top_k else settings.chat_retrieval_pool_k
         config = PlannedRetrievalConfig(
             pool_k=pool_k,
@@ -537,7 +607,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         and retrieval_diagnostics.get("strategy") == "overview_page_context"
     )
 
-    if not listing_map_result and (is_overview or is_listing):
+    if not listing_map_result and not use_fast_tier and not carp_refused_empty and (is_overview or is_listing):
         from app.services.entity_page_chunks import (
             chunks_from_entity_mentions,
             merge_search_hits,
@@ -573,25 +643,27 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             )
             hits = merge_search_hits(hits, entity_hits)
 
-    if not listing_map_result:
+    if not listing_map_result and not use_fast_tier and not carp_refused_empty:
         yield emitter.progress("rank", "start")
         yield emitter.progress("coverage", "start")
         if overview_page_context:
             from app.services.entity_page_chunks import dedupe_hits_by_page
 
             hits = dedupe_hits_by_page(hits)
-        hits, rank_cover_diag = rank_and_cover_hits(
-            db,
-            query=body.message,
-            understanding=understanding,
-            hits=hits,
-            workspace_id=body.workspace_id,
-            document_ids=scoped_document_ids or body.document_ids,
-            bundles=bundles,
-            top_k=top_k,
-            rank_mode=rank_mode,  # type: ignore[arg-type]
-            page_level_pool=overview_page_context,
-        )
+        with latency.phase("rank_coverage"):
+            hits, rank_cover_diag = await asyncio.to_thread(
+                rank_and_cover_hits,
+                db,
+                query=body.message,
+                understanding=understanding,
+                hits=hits,
+                workspace_id=body.workspace_id,
+                document_ids=scoped_document_ids or body.document_ids,
+                bundles=bundles,
+                top_k=top_k,
+                rank_mode=rank_mode,  # type: ignore[arg-type]
+                page_level_pool=overview_page_context,
+            )
         retrieval_diagnostics.update(rank_cover_diag)
         yield emitter.progress(
             "coverage",
@@ -600,7 +672,10 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
             gaps_filled=rank_cover_diag.get("coverage_report", {}).get("gaps_filled", []),
         )
         yield emitter.progress("rank", "done", ranked_count=len(hits))
-    else:
+    elif use_fast_tier and fast_citation_map:
+        yield emitter.progress("rank", "done", ranked_count=len(hits), strategy="fast_tier")
+        yield emitter.progress("coverage", "done", chunk_count=len(hits), skipped=True)
+    elif listing_map_result:
         cmap = listing_map_result["citation_map"]
         retrieval_diagnostics["pages_in_context"] = sorted({r.page for r in cmap.refs})
         retrieval_diagnostics["documents_in_context"] = list(
@@ -609,12 +684,16 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         retrieval_diagnostics["documents_missing_from_context"] = []
         yield emitter.progress("rank", "done", ranked_count=len(cmap.refs), strategy="listing_map_reduce")
         yield emitter.progress("coverage", "done", chunk_count=len(cmap.refs), skipped=True)
+    elif carp_refused_empty:
+        yield emitter.progress("rank", "done", ranked_count=0, skipped=True, strategy="carp_refused")
+        yield emitter.progress("coverage", "done", chunk_count=0, skipped=True)
 
     chunk_count = (
         len(listing_map_result["citation_map"].refs)
         if listing_map_result
         else len(hits)
     )
+    retrieval_diagnostics["latency_ms"] = latency.to_dict()
     retrieval_event = {
         "event": "retrieval",
         "chunk_count": chunk_count,
@@ -625,7 +704,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     }
     yield retrieval_event
 
-    if refuse_gate(hits) and not listing_map_result:
+    if (refuse_gate(hits) or carp_refused_empty) and not listing_map_result:
         refs: list[dict] = []
         _persist_message(
             db,
@@ -651,7 +730,10 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         hits = prioritize_overview_hits(hits)
 
     tabular_overlay: str | None = None
-    if listing_map_result:
+    if use_fast_tier and fast_citation_map and fast_system_prompt:
+        citation_map = fast_citation_map
+        system_prompt = fast_system_prompt
+    elif listing_map_result:
         citation_map = listing_map_result["citation_map"]
         system_prompt = listing_map_result["reduce_prompt"]
         if body.tabular_review_id:
@@ -663,20 +745,22 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         doc_names = get_document_names(db, list({h.document_id for h in hits}))
         emitter.update_doc_names(doc_names)
         coverage_report = retrieval_diagnostics.get("coverage_report") or {}
-        citation_map, system_prompt = build_evidence_prompt_and_map(
-            db,
-            hits=hits,
-            query=body.message,
-            understanding=understanding,
-            bundles=bundles,
-            doc_names=doc_names,
-            workspace_id=body.workspace_id,
-            is_listing=is_listing,
-            is_overview=is_overview,
-            coverage_report=coverage_report,
-            synthesis_mode=agent_policy.synthesis_mode if agent_policy else "chat",
-            agent_profile=agent_policy.agent_profile if agent_policy else "firm",
-        )
+        with latency.phase("prompt_build"):
+            citation_map, system_prompt = await asyncio.to_thread(
+                build_evidence_prompt_and_map,
+                db,
+                hits=hits,
+                query=body.message,
+                understanding=understanding,
+                bundles=bundles,
+                doc_names=doc_names,
+                workspace_id=body.workspace_id,
+                is_listing=is_listing,
+                is_overview=is_overview,
+                coverage_report=coverage_report,
+                synthesis_mode=agent_policy.synthesis_mode if agent_policy else "chat",
+                agent_profile=agent_policy.agent_profile if agent_policy else "firm",
+            )
         if body.tabular_review_id:
             from app.services.tabular import build_tabular_chat_context
 
@@ -693,6 +777,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
     )
 
     yield emitter.progress("generate", "start")
+    latency.mark_synthesis_start()
 
     async for ev in stream_corpus_evidence_step(
         db,
@@ -708,6 +793,7 @@ async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dic
         system_prompt=system_prompt,
     ):
         if ev["event"] == "content":
+            latency.mark_first_content_token()
             yield ev
         elif ev["event"] == "final":
             validated = ev["content"]

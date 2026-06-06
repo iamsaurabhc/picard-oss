@@ -42,6 +42,7 @@ USER_SETTING_KEYS = frozenset(
         "citation_judge_fail_closed",
         "prompt_variant",
         "enable_hybrid_search",
+        "chat_latency_profile",
         "embedding_model_id",
         "embedding_dims",
         "embedding_cache_dir",

@@ -21,6 +21,7 @@ function normalizeAppSettings(raw: AppSettings): AppSettings {
     mem0_store_on_run_end: raw.mem0_store_on_run_end ?? true,
     agent_pack_installed: raw.agent_pack_installed ?? false,
     chat_mode_default: raw.chat_mode_default ?? "rag",
+    chat_latency_profile: raw.chat_latency_profile ?? "balanced",
     agent_max_iterations: raw.agent_max_iterations ?? 5,
     agent_scope_confirm_min_docs: raw.agent_scope_confirm_min_docs ?? 10,
     mem0_max_entries: raw.mem0_max_entries ?? 0,
@@ -76,6 +77,7 @@ export default function SettingsPage() {
         llm_model: s.llm_model,
         ollama_base_url: s.ollama_base_url,
         enable_carp: s.enable_carp,
+        chat_latency_profile: s.chat_latency_profile,
         enable_llm_query_understanding: s.enable_llm_query_understanding,
         enable_context_ranker: s.enable_context_ranker,
         enable_ner_entity_extract: s.enable_ner_entity_extract,
@@ -222,6 +224,22 @@ export default function SettingsPage() {
           ) : null}
         </p>
       )}
+
+      <section className="mt-8">
+        <h2 className="text-sm font-medium text-neutral-800">Chat latency</h2>
+        <p className="mt-1 text-xs text-neutral-500">
+          Balanced skips slow SLM steps on the chat path; quality runs full retrieval tuning.
+        </p>
+        <select
+          className="mt-2 w-full rounded border border-neutral-300 px-3 py-2 text-sm"
+          value={settings.chat_latency_profile}
+          onChange={(e) => setSettings({ ...settings, chat_latency_profile: e.target.value })}
+        >
+          <option value="quality">Quality (full SLM pipeline)</option>
+          <option value="balanced">Balanced (default)</option>
+          <option value="fast">Fast (anchor FTS short-circuit)</option>
+        </select>
+      </section>
 
       <section className="mt-8 space-y-2">
         <h2 className="text-sm font-medium text-neutral-800">Features</h2>

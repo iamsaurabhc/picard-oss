@@ -134,6 +134,66 @@ def run_migrations(engine: Engine) -> None:
                 )
             """))
 
+        _ensure_latency_indexes(conn)
+        _ensure_page_embeddings_table(conn)
+        _ensure_vec_tables(conn)
+
+
+def _ensure_latency_indexes(conn) -> None:
+    statements = [
+        "CREATE INDEX IF NOT EXISTS idx_page_entities_document ON page_entities(document_id, entity_id)",
+        "CREATE INDEX IF NOT EXISTS idx_page_entities_doc_page ON page_entities(document_id, page_number)",
+        "CREATE INDEX IF NOT EXISTS idx_entity_mentions_doc_type ON entity_mentions(document_id, page_number, entity_id)",
+        "CREATE INDEX IF NOT EXISTS idx_documents_ws_parse_status ON documents(workspace_id, parse_status)",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)",
+        "CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(model_id, document_id)",
+    ]
+    for stmt in statements:
+        try:
+            conn.execute(text(stmt))
+        except Exception:
+            pass
+
+
+def _ensure_page_embeddings_table(conn) -> None:
+    tables = {
+        row[0]
+        for row in conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table'")
+        ).fetchall()
+    }
+    if "page_embeddings" in tables:
+        return
+    conn.execute(text("""
+        CREATE TABLE page_embeddings (
+          document_id TEXT NOT NULL,
+          page_number INTEGER NOT NULL,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          chunk_count INTEGER NOT NULL,
+          embedding_blob BLOB NOT NULL,
+          model_id TEXT NOT NULL,
+          dims INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (document_id, page_number),
+          FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+        )
+    """))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_page_embeddings_workspace ON page_embeddings(workspace_id)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_page_embeddings_document ON page_embeddings(document_id)"
+    ))
+    conn.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_page_embeddings_doc_page ON page_embeddings(document_id, page_number)"
+    ))
+
+
+def _ensure_vec_tables(conn) -> None:
+    from app.services.sqlite_vec import _probe_vec_backend
+
+    _probe_vec_backend()
+
 
 def _init_sql_path() -> Path:
     rel = Path(__file__).parent / "init.sql"

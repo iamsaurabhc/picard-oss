@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     )
     prompt_variant: str = Field(default="help_v2", validation_alias="PROMPT_VARIANT")
     enable_hybrid_search: bool = Field(
-        default=False,
+        default=True,
         validation_alias="ENABLE_HYBRID_SEARCH",
     )
     hybrid_pool_k: int = 16
@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     firm_agent_listing_map_max_docs: int = 16
     court_agent_listing_discovery_doc_limit: int = 48
     court_agent_listing_map_max_docs: int = 10
-    listing_map_reduce_min_docs: int = 4
+    listing_map_reduce_min_docs: int = 8
     listing_max_pages_per_doc: int = 6
     agent_listing_max_pages_per_doc: int = 8
     listing_max_chars_per_page: int = 8000
@@ -174,6 +174,10 @@ class Settings(BaseSettings):
     chat_mode_default: str = Field(
         default="rag",
         validation_alias=AliasChoices("CHAT_MODE_DEFAULT", "chat_mode_default"),
+    )
+    chat_latency_profile: str = Field(
+        default="balanced",
+        validation_alias=AliasChoices("CHAT_LATENCY_PROFILE", "chat_latency_profile"),
     )
     agent_max_iterations: int = Field(
         default=5,

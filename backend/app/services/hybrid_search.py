@@ -7,8 +7,17 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import Chunk, ChunkEmbedding, Document
-from app.services.chunk_embeddings import blob_to_embedding, cosine_similarity, embed_texts
-from app.services.fts_search import FtsHit, fts_search
+from app.services.chunk_embeddings import (
+    blob_to_embedding,
+    embed_texts,
+    l2_normalize,
+)
+from app.services.fts_search import FtsHit
+from app.services.page_embeddings import vector_page_search
+from app.services.query_embedding_cache import (
+    get_cached_query_embedding,
+    set_cached_query_embedding,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +37,23 @@ def _should_skip_vector(pool: dict[str, FtsHit], pool_cap: int) -> bool:
     return best <= settings.fts_min_score + 5
 
 
+def _query_embedding(
+    query: str,
+    *,
+    workspace_id: str,
+) -> list[float] | None:
+    model_id = settings.embedding_model_id
+    cached = get_cached_query_embedding(query, workspace_id=workspace_id, model_id=model_id)
+    if cached:
+        return cached
+    vecs = embed_texts([query])
+    if not vecs:
+        return None
+    vec = l2_normalize(vecs[0])
+    set_cached_query_embedding(query, vec, workspace_id=workspace_id, model_id=model_id)
+    return vec
+
+
 def vector_search(
     db: Session,
     *,
@@ -37,11 +63,62 @@ def vector_search(
     top_k: int,
 ) -> list[tuple[FtsHit, float]]:
     """Return (FtsHit, similarity) for top_k chunks by embedding similarity."""
-    q_vec = embed_texts([query])
-    if not q_vec:
+    if not settings.enable_hybrid_search or not query.strip():
         return []
 
-    query_embedding = q_vec[0]
+    query_embedding = _query_embedding(query, workspace_id=workspace_id)
+    if not query_embedding:
+        return []
+
+    from app.services.retrieval_context import get_retrieval_context
+
+    ctx = get_retrieval_context()
+    cache_key = (
+        workspace_id,
+        ",".join(sorted(document_ids or [])),
+        query.casefold().strip(),
+        str(top_k),
+    )
+    if cache_key in ctx.chunk_vector_search_cache:
+        return list(ctx.chunk_vector_search_cache[cache_key])
+
+    from app.services.sqlite_vec import knn_chunk_ids, sqlite_vec_available
+
+    if sqlite_vec_available():
+        knn = knn_chunk_ids(
+            db,
+            query_vec=query_embedding,
+            workspace_id=workspace_id,
+            document_ids=document_ids,
+            top_k=top_k,
+        )
+        if knn:
+            from app.services.fts_search import parse_bbox
+
+            chunk_ids = [cid for cid, _sim in knn]
+            sim_by_id = {cid: sim for cid, sim in knn}
+            chunks = db.scalars(select(Chunk).where(Chunk.id.in_(chunk_ids))).all()
+            chunk_order = {cid: i for i, cid in enumerate(chunk_ids)}
+            chunks.sort(key=lambda c: chunk_order.get(c.id, 999))
+            result = [
+                (
+                    FtsHit(
+                        chunk_id=c.id,
+                        document_id=c.document_id,
+                        page_number=c.page_number,
+                        text_content=c.text_content,
+                        heading_path=c.heading_path,
+                        section_key=c.section_key,
+                        bbox_json=c.bbox_json,
+                        score=-sim_by_id.get(c.id, 0.0),
+                    ),
+                    sim_by_id.get(c.id, 0.0),
+                )
+                for c in chunks
+            ]
+            ctx.chunk_vector_search_cache[cache_key] = result
+            return result
+
     stmt = (
         select(ChunkEmbedding, Chunk)
         .join(Chunk, Chunk.id == ChunkEmbedding.chunk_id)
@@ -58,7 +135,7 @@ def vector_search(
     scored: list[tuple[FtsHit, float]] = []
     for emb_row, chunk in rows:
         vec = blob_to_embedding(emb_row.embedding_blob, emb_row.dims)
-        sim = cosine_similarity(query_embedding, vec)
+        sim = sum(x * y for x, y in zip(query_embedding, vec))
         scored.append((
             FtsHit(
                 chunk_id=chunk.id,
@@ -74,7 +151,9 @@ def vector_search(
         ))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:top_k]
+    result = scored[:top_k]
+    ctx.chunk_vector_search_cache[cache_key] = result
+    return result
 
 
 def enrich_fts_pool_with_hybrid(
@@ -159,30 +238,17 @@ def vector_page_scores(
     workspace_id: str,
     document_ids: list[str] | None,
     top_k_per_query: int = 8,
+    fts_page_scores: dict[int, float] | None = None,
 ) -> dict[int, float]:
-    """Best embedding similarity per page across one or more facet queries."""
-    if not settings.enable_hybrid_search:
-        return {}
-
-    page_scores: dict[int, float] = {}
-    seen_queries: set[str] = set()
-    for raw in queries:
-        q = (raw or "").strip()
-        key = q.casefold()
-        if not q or key in seen_queries:
-            continue
-        seen_queries.add(key)
-        vec_hits = vector_search(
-            db,
-            query=q,
-            workspace_id=workspace_id,
-            document_ids=document_ids,
-            top_k=top_k_per_query,
-        )
-        for hit, sim in vec_hits:
-            page = int(hit.page_number)
-            page_scores[page] = max(page_scores.get(page, 0.0), sim)
-    return page_scores
+    """Best embedding similarity per page — page_vectors only, never chunk scan."""
+    return vector_page_search(
+        db,
+        queries=queries,
+        workspace_id=workspace_id,
+        document_ids=document_ids,
+        top_k_per_query=top_k_per_query,
+        fts_page_scores=fts_page_scores,
+    )
 
 
 def fuse_page_scores_rrf(

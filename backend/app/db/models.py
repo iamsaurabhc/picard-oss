@@ -107,6 +107,19 @@ class ChunkEmbedding(Base):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
+class PageEmbedding(Base):
+    __tablename__ = "page_embeddings"
+
+    document_id: Mapped[str] = mapped_column(String, ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    page_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String, ForeignKey("workspaces.id", ondelete="CASCADE"))
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_blob: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    model_id: Mapped[str] = mapped_column(String, nullable=False)
+    dims: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 

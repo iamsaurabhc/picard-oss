@@ -102,6 +102,28 @@ CREATE TABLE IF NOT EXISTS chunk_embeddings (
 CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_document
   ON chunk_embeddings(document_id);
 
+CREATE TABLE IF NOT EXISTS page_embeddings (
+  document_id TEXT NOT NULL,
+  page_number INTEGER NOT NULL,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  chunk_count INTEGER NOT NULL,
+  embedding_blob BLOB NOT NULL,
+  model_id TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (document_id, page_number),
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_page_embeddings_workspace
+  ON page_embeddings(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_page_embeddings_document
+  ON page_embeddings(document_id);
+CREATE INDEX IF NOT EXISTS idx_page_embeddings_doc_page
+  ON page_embeddings(document_id, page_number);
+CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model
+  ON chunk_embeddings(model_id, document_id);
+
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id TEXT PRIMARY KEY,
   workspace_id TEXT,
@@ -202,6 +224,16 @@ CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity ON entity_mentions(entity_
 CREATE INDEX IF NOT EXISTS idx_entity_mentions_page ON entity_mentions(document_id, page_number);
 CREATE INDEX IF NOT EXISTS idx_page_entities_entity ON page_entities(entity_id, document_id, page_number);
 CREATE INDEX IF NOT EXISTS idx_entities_workspace ON entities(workspace_id, entity_type, canonical_value);
+CREATE INDEX IF NOT EXISTS idx_page_entities_document
+  ON page_entities(document_id, entity_id);
+CREATE INDEX IF NOT EXISTS idx_page_entities_doc_page
+  ON page_entities(document_id, page_number);
+CREATE INDEX IF NOT EXISTS idx_entity_mentions_doc_type
+  ON entity_mentions(document_id, page_number, entity_id);
+CREATE INDEX IF NOT EXISTS idx_documents_ws_parse_status
+  ON documents(workspace_id, parse_status);
+CREATE INDEX IF NOT EXISTS idx_chunks_document_id
+  ON chunks(document_id);
 
 -- FTS5 sync triggers
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN

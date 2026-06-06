@@ -904,6 +904,33 @@ def _extract_tokens(query: str) -> list[str]:
     return out
 
 
+_COMPOUND_AND_SPLIT = re.compile(r"\band\b", re.IGNORECASE)
+
+
+def _extract_multi_constraint_compound(
+    query: str,
+    existing: list[QueryConstraint],
+) -> list[QueryConstraint]:
+    """Parse trailing ``and <phrase>`` as a second constraint for forced multi_constraint mode."""
+    parts = _COMPOUND_AND_SPLIT.split(query, maxsplit=1)
+    if len(parts) < 2:
+        return []
+    tail = parts[1].strip().rstrip("?.!,")
+    if len(tail) < 3:
+        return []
+    canonical = tail.casefold()
+    seen = {(c.type, c.canonical.casefold()) for c in existing}
+    party_canonicals = {c.canonical.casefold() for c in existing if c.type == "party"}
+    if canonical in party_canonicals:
+        return []
+    for party in party_canonicals:
+        if party in canonical or canonical in party:
+            return []
+    if ("identifier", canonical) in seen:
+        return []
+    return [QueryConstraint(type="identifier", canonical=canonical, surfaces=[tail])]
+
+
 def _rule_confidence(constraints: list[QueryConstraint], query: str) -> float:
     if not constraints:
         return 0.3
@@ -1354,7 +1381,7 @@ def understand_query(
     workspace_id: str | None = None,
     document_ids: list[str] | None = None,
 ) -> QueryUnderstanding:
-    """SLM-first query planning with document context and token+catalog fallback."""
+    """Rule-first query planning with optional SLM upgrade when confidence is low."""
     document_context = (
         build_document_context(db, workspace_id=workspace_id, document_ids=document_ids)
         if db is not None
@@ -1362,17 +1389,39 @@ def understand_query(
     )
 
     understanding: QueryUnderstanding | None = None
-    if settings.enable_llm_query_understanding:
-        understanding = _llm_understand(query, document_context)
+    if settings.enable_regex_nlp:
+        understanding = _regex_fallback_understanding(query)
+    else:
+        understanding = _token_catalog_fallback_understanding(
+            query, db=db, workspace_id=workspace_id,
+        )
 
-    if understanding is None:
-        if settings.enable_regex_nlp:
-            understanding = _regex_fallback_understanding(query)
-        else:
-            understanding = _token_catalog_fallback_understanding(
-                query, db=db, workspace_id=workspace_id,
+    needs_llm = (
+        settings.enable_llm_query_understanding
+        and (
+            retrieval_mode == "multi_constraint"
+            or understanding.confidence < settings.planner_rule_confidence
+            or understanding.intent == "general"
+            or (
+                understanding.intent not in {
+                    "case_overview",
+                    "entity_matter_listing",
+                    "factual_lookup",
+                }
+                and not understanding.search_passes
             )
-    elif settings.enable_regex_nlp:
+        )
+    )
+    if needs_llm:
+        llm_result = _llm_understand(query, document_context)
+        if llm_result is not None:
+            understanding = llm_result
+
+    if settings.enable_regex_nlp and understanding.used_llm:
+        rule_constraints = _extract_rule_constraints(query)
+        understanding = _merge_rule_constraints(understanding, rule_constraints)
+        understanding = _validate_dates(understanding, query)
+    elif settings.enable_regex_nlp and not understanding.used_llm:
         rule_constraints = _extract_rule_constraints(query)
         understanding = _merge_rule_constraints(understanding, rule_constraints)
         understanding = _validate_dates(understanding, query)
@@ -1380,6 +1429,17 @@ def understand_query(
     if not understanding.fts.must_terms and not understanding.fts.phrases:
         if understanding.intent not in {"factual_lookup", "case_overview", "entity_matter_listing"}:
             understanding.fts.must_terms = _extract_tokens(query)[:2]
+
+    if retrieval_mode == "multi_constraint":
+        compound = _extract_multi_constraint_compound(query, understanding.constraints)
+        if compound:
+            understanding = understanding.model_copy(
+                update={"constraints": [*understanding.constraints, *compound]}
+            )
+        q_cf = query.casefold()
+        if any(p in q_cf for p in ("case context", "context for", "matter context")):
+            if understanding.intent in {"general", "case_overview"}:
+                understanding = understanding.model_copy(update={"intent": "case_context"})
 
     mode = _resolve_mode(
         understanding.constraints,
@@ -1395,6 +1455,9 @@ def understand_query(
     understanding = _apply_listing_fields(
         understanding, query, db=db, workspace_id=workspace_id,
     )
+
+    if retrieval_mode == "multi_constraint" and understanding.intent == "case_overview":
+        understanding = understanding.model_copy(update={"intent": "case_context"})
 
     if (
         db is not None
