@@ -35,6 +35,14 @@ from app.services.agent_retrieval_policy import (
     build_agent_retrieval_policy,
     routing_flags_from_policy,
 )
+from app.services.document_context import build_document_context
+from app.services.pii_proxy import (
+    batch_register_for_synthesis,
+    get_active_proxy,
+    pii_enabled_for_chat,
+    pii_request_scope,
+    seed_pii_context,
+)
 from app.services.query_understanding import understand_query, understanding_summary
 from app.services.retrieval_depth import depth_policy_to_diagnostics, resolve_retrieval_depth
 from app.services.search import execute_search
@@ -449,31 +457,51 @@ async def run_chat_corpus_answer(
     on_progress: Callable[[dict], None] | None = None,
 ) -> EvidenceStepResult:
     """Full kernel synthesis — same path as chat post-retrieval."""
-    agent_deep = _agent_deep_retrieval(body)
-    bundle = retrieve_for_agent(db, body, on_progress=on_progress) if agent_deep else retrieve_for_chat(
-        db, body, on_progress=on_progress,
-    )
-    if bundle.refused and refuse_gate(bundle.hits) and not bundle.listing_map_result:
-        from app.services.citation_kernel import _empty_citation_map, _empty_validation
+    with pii_request_scope(enabled=pii_enabled_for_chat(body)):
+        proxy = get_active_proxy()
+        if proxy is not None:
+            doc_block = build_document_context(
+                db,
+                workspace_id=body.workspace_id,
+                document_ids=body.document_ids,
+            ).to_prompt_block()
+            await seed_pii_context(proxy, query=body.message, document_context_block=doc_block)
 
-        return EvidenceStepResult(
-            refused=True,
-            content="No relevant information was found in the selected documents.",
-            citation_map=_empty_citation_map(),
-            references=[],
-            validation=_empty_validation(),
-            judge=None,
+        agent_deep = _agent_deep_retrieval(body)
+        bundle = retrieve_for_agent(db, body, on_progress=on_progress) if agent_deep else retrieve_for_chat(
+            db, body, on_progress=on_progress,
         )
-    return await run_corpus_evidence_step(
-        db,
-        body.workspace_id,
-        body.message,
-        hits=bundle.hits,
-        intent=bundle.understanding.intent if bundle.understanding else "general",
-        bundles=bundle.bundles,
-        allow_partial_disclosure=body.allow_partial_disclosure,
-        search_mode=bundle.search_mode,
-        skip_refuse=True,
-        pre_built_map=bundle.citation_map,
-        pre_built_prompt=bundle.system_prompt,
-    )
+        if bundle.refused and refuse_gate(bundle.hits) and not bundle.listing_map_result:
+            from app.services.citation_kernel import _empty_citation_map, _empty_validation
+
+            return EvidenceStepResult(
+                refused=True,
+                content="No relevant information was found in the selected documents.",
+                citation_map=_empty_citation_map(),
+                references=[],
+                validation=_empty_validation(),
+                judge=None,
+            )
+
+        reduce_prompt = None
+        if bundle.listing_map_result:
+            reduce_prompt = bundle.listing_map_result.get("reduce_prompt")
+        await batch_register_for_synthesis(
+            proxy,
+            hits=bundle.hits,
+            system_prompt=bundle.system_prompt,
+            reduce_prompt=reduce_prompt,
+        )
+        return await run_corpus_evidence_step(
+            db,
+            body.workspace_id,
+            body.message,
+            hits=bundle.hits,
+            intent=bundle.understanding.intent if bundle.understanding else "general",
+            bundles=bundle.bundles,
+            allow_partial_disclosure=body.allow_partial_disclosure,
+            search_mode=bundle.search_mode,
+            skip_refuse=True,
+            pre_built_map=bundle.citation_map,
+            pre_built_prompt=bundle.system_prompt,
+        )

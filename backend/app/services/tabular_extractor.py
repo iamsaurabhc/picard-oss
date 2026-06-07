@@ -16,6 +16,12 @@ from app.schemas import TabularBatchGenerateRequest, TabularCellOut, TabularColu
 from app.services import tabular as tabular_svc
 from app.services.fts_search import FtsHit
 from app.services.model_router import ModelRole, completion
+from app.services.pii_proxy import (
+    batch_register_texts,
+    get_active_proxy,
+    pii_enabled_for_settings_default,
+    pii_request_scope,
+)
 from app.services.tabular_grounding import (
     build_tabular_grounding,
     document_doc_type,
@@ -207,6 +213,10 @@ def _run_extraction(
         strict_metadata=strict_metadata,
         shorter=shorter,
     )
+    proxy = get_active_proxy()
+    if proxy is not None:
+        texts = [doc_name, instruction, grounding] + [h.text_content for h in hits]
+        batch_register_texts(proxy, texts)
     raw = completion(
         messages=messages,
         role=ModelRole.LLM,
@@ -244,6 +254,17 @@ def _finalize_cell(
 
 
 def extract_cell(
+    db: Session,
+    *,
+    cell: TabularCell,
+    review: TabularReview,
+    column: TabularColumn,
+) -> TabularCellOut:
+    with pii_request_scope(enabled=pii_enabled_for_settings_default()):
+        return _extract_cell_body(db, cell=cell, review=review, column=column)
+
+
+def _extract_cell_body(
     db: Session,
     *,
     cell: TabularCell,

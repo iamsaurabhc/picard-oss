@@ -38,6 +38,7 @@ export default function SettingsPage() {
   const [anthropicKey, setAnthropicKey] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [installingComponentId, setInstallingComponentId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [s, c] = await Promise.all([picardApi.getSettings(), picardApi.getComponents()]);
@@ -274,23 +275,46 @@ export default function SettingsPage() {
       <section className="mt-8">
         <h2 className="text-sm font-medium text-neutral-800">Optional components</h2>
         <div className="mt-2 space-y-2">
-          {components.map((c) => (
-            <div key={c.id} className="flex items-center justify-between rounded border border-neutral-200 px-3 py-2 text-sm">
-              <span>
-                {c.name} {c.installed ? "✓" : ""}
-              </span>
-              <button
-                type="button"
-                className="text-xs underline"
-                onClick={async () => {
-                  await picardApi.installComponent(c.id);
-                  await load();
-                }}
-              >
-                Install
-              </button>
-            </div>
-          ))}
+          {components.map((c) => {
+            const installing = installingComponentId === c.id;
+            return (
+              <div key={c.id} className="flex items-center justify-between rounded border border-neutral-200 px-3 py-2 text-sm">
+                <span>
+                  {c.name} {c.installed ? "✓" : ""}
+                </span>
+                {c.installed ? (
+                  <span className="text-xs text-neutral-500">Installed</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-xs underline disabled:opacity-50"
+                    disabled={installingComponentId !== null}
+                    onClick={async () => {
+                      setMessage(null);
+                      setInstallingComponentId(c.id);
+                      try {
+                        const result = await picardApi.installComponent(c.id);
+                        await load();
+                        setMessage(result.message || `${c.name} installed.`);
+                      } catch (err) {
+                        const detail =
+                          err instanceof Error && err.name === "TimeoutError"
+                            ? "Install timed out. Large packs can take several minutes—retry or use the terminal hint."
+                            : err instanceof Error
+                              ? err.message
+                              : "Install failed.";
+                        setMessage(detail);
+                      } finally {
+                        setInstallingComponentId(null);
+                      }
+                    }}
+                  >
+                    {installing ? "Installing…" : "Install"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 

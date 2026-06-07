@@ -16,6 +16,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -r backend/requirements-core.txt
       - run: cd backend && python -c "from app.config import settings; from app.main import app; print(settings.picard_data_dir, app.version)"
+      - run: cd backend && pytest tests/test_pii_proxy.py tests/test_model_router_pii.py tests/test_pii_e2e_chat.py tests/test_pii_e2e_tabular.py -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -24,7 +25,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: cd frontend && npm ci && npm run build
+      - run: cd frontend && npm ci && npm run test && npm run build
 
   compose-smoke:
     runs-on: ubuntu-latest

@@ -179,6 +179,21 @@ class Settings(BaseSettings):
         default="balanced",
         validation_alias=AliasChoices("CHAT_LATENCY_PROFILE", "chat_latency_profile"),
     )
+    enable_pii_protection_default: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "ENABLE_PII_PROTECTION_DEFAULT",
+            "enable_pii_protection_default",
+        ),
+    )
+    pii_spacy_model: str = Field(
+        default="en_core_web_sm",
+        validation_alias=AliasChoices("PII_SPACY_MODEL", "pii_spacy_model"),
+    )
+    pii_use_presidio: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("PII_USE_PRESIDIO", "pii_use_presidio"),
+    )
     agent_max_iterations: int = Field(
         default=5,
         validation_alias=AliasChoices("AGENT_MAX_ITERATIONS", "agent_max_iterations"),

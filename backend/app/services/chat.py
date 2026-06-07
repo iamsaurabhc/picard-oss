@@ -35,6 +35,14 @@ from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retri
 from app.services.retrieval_context import clear_retrieval_context, reset_retrieval_context
 from app.services.query_understanding import understand_query, understanding_summary, _case_name_terms
 from app.services.retrieval_depth import depth_policy_to_diagnostics, resolve_retrieval_depth
+from app.services.document_context import build_document_context
+from app.services.pii_proxy import (
+    batch_register_for_synthesis,
+    get_active_proxy,
+    pii_enabled_for_chat,
+    pii_request_scope,
+    seed_pii_context,
+)
 from app.services.retrieval_progress import RetrievalProgressEmitter
 from app.services.search import execute_search
 
@@ -311,11 +319,12 @@ def _emit_carp_snippets(
 async def stream_chat(db: Session, body: ChatStreamRequest) -> AsyncIterator[dict]:
     reset_retrieval_context()
     latency = ChatLatencyTracker()
-    try:
-        async for ev in _stream_chat_impl(db, body, latency):
-            yield ev
-    finally:
-        clear_retrieval_context()
+    with pii_request_scope(enabled=pii_enabled_for_chat(body)):
+        try:
+            async for ev in _stream_chat_impl(db, body, latency):
+                yield ev
+        finally:
+            clear_retrieval_context()
 
 
 async def _stream_chat_impl(
@@ -360,6 +369,17 @@ async def _stream_chat_body(
     emitter = RetrievalProgressEmitter(
         doc_names=_workspace_doc_names(db, body.workspace_id, body.document_ids)
     )
+
+    proxy = get_active_proxy()
+    if proxy is not None:
+        doc_block = build_document_context(
+            db,
+            workspace_id=body.workspace_id,
+            document_ids=body.document_ids,
+        ).to_prompt_block()
+        yield emitter.progress("pii", "start")
+        await seed_pii_context(proxy, query=body.message, document_context_block=doc_block)
+        yield emitter.progress("pii", "done")
 
     yield emitter.progress("understanding", "start")
 
@@ -845,6 +865,15 @@ async def _stream_chat_body(
 
     yield emitter.progress("generate", "start")
     latency.mark_synthesis_start()
+
+    reduce_prompt = listing_map_result.get("reduce_prompt") if listing_map_result else None
+    await batch_register_for_synthesis(
+        proxy,
+        hits=hits,
+        system_prompt=system_prompt,
+        tabular_overlay=tabular_overlay,
+        reduce_prompt=reduce_prompt,
+    )
 
     async for ev in stream_corpus_evidence_step(
         db,

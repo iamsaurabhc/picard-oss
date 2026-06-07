@@ -9,6 +9,7 @@ from app.config import Settings, reload_settings, settings
 from app.services.agent_pack import agent_pack_available, agent_pack_error
 from app.services.components import install_component, list_components
 from app.services.model_router import llm_available
+from app.services.pii_proxy import pii_protection_available
 from app.services.secrets_store import save_secrets, secrets_status
 from app.services.settings_store import (
     USER_SETTING_KEYS,
@@ -33,6 +34,8 @@ class SettingsOut(BaseModel):
     enable_excerpt_selector: bool
     enable_carp: bool
     chat_latency_profile: str
+    enable_pii_protection_default: bool
+    pii_protection_available: bool
     enable_ner_entity_extract: bool
     enable_slm_entity_extract: bool
     liteparse_ocr_server_url: str | None
@@ -69,6 +72,7 @@ class SettingsUpdate(BaseModel):
     enable_excerpt_selector: bool | None = None
     enable_carp: bool | None = None
     chat_latency_profile: str | None = None
+    enable_pii_protection_default: bool | None = None
     enable_ner_entity_extract: bool | None = None
     enable_slm_entity_extract: bool | None = None
     liteparse_ocr_server_url: str | None = None
@@ -109,6 +113,8 @@ def _settings_to_out(s: Settings) -> SettingsOut:
         enable_excerpt_selector=s.enable_excerpt_selector,
         enable_carp=s.enable_carp,
         chat_latency_profile=s.chat_latency_profile,
+        enable_pii_protection_default=s.enable_pii_protection_default,
+        pii_protection_available=pii_protection_available(),
         enable_ner_entity_extract=s.enable_ner_entity_extract,
         enable_slm_entity_extract=s.enable_slm_entity_extract,
         liteparse_ocr_server_url=s.liteparse_ocr_server_url,

@@ -1,6 +1,8 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 const REQUEST_TIMEOUT_MS = 15_000;
+/** Pip + spaCy model download can exceed the default API timeout. */
+const COMPONENT_INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
 
 export function documentFileUrl(documentId: string): string {
   return `${API_URL}/documents/${documentId}/file`;
@@ -78,6 +80,8 @@ export type AppSettings = {
   enable_excerpt_selector: boolean;
   enable_carp: boolean;
   chat_latency_profile: string;
+  enable_pii_protection_default: boolean;
+  pii_protection_available: boolean;
   enable_ner_entity_extract: boolean;
   enable_slm_entity_extract: boolean;
   liteparse_ocr_server_url: string | null;
@@ -114,6 +118,7 @@ export type AppSettingsUpdate = {
   enable_excerpt_selector?: boolean;
   enable_carp?: boolean;
   chat_latency_profile?: string;
+  enable_pii_protection_default?: boolean;
   enable_ner_entity_extract?: boolean;
   enable_slm_entity_extract?: boolean;
   liteparse_ocr_server_url?: string | null;
@@ -353,6 +358,7 @@ export type ChatStreamRequest = {
   top_k?: number;
   tabular_review_id?: string;
   workflow_id?: string;
+  enable_pii_protection?: boolean;
 };
 
 export type ColumnFormat =
@@ -488,14 +494,26 @@ export type ChatStreamEvent =
   | { event: "workflow_applied"; workflow_id: string; title?: string }
   | { event: "step_refused"; tool?: string; query?: string };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = {
+  timeoutMs?: number;
+};
+
+async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
-    signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || res.statusText);
+    let message = text || res.statusText;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      if (typeof parsed.detail === "string") message = parsed.detail;
+    } catch {
+      /* keep raw body */
+    }
+    throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -685,9 +703,11 @@ export const picardApi = {
   getComponents: () =>
     request<{ components: AppComponent[] }>("/settings/components"),
   installComponent: (id: string) =>
-    request<{ ok: boolean; message: string }>(`/settings/components/${id}/install`, {
-      method: "POST",
-    }),
+    request<{ ok: boolean; message: string }>(
+      `/settings/components/${id}/install`,
+      { method: "POST" },
+      { timeoutMs: COMPONENT_INSTALL_TIMEOUT_MS },
+    ),
   checkForUpdates: () => request<UpdateCheck>("/updates/check"),
   getVersion: () => request<{ version: string; channel?: string; build_sha?: string | null }>("/version"),
   listPrompts: () => request<{ prompts: PromptSummary[] }>("/prompts"),

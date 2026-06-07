@@ -6,6 +6,8 @@ import type { ChatMessage, TabularReview } from "@/lib/picardApi";
 import { picardApi } from "@/lib/picardApi";
 import { parseCellRefs } from "./citation-utils";
 import { Button } from "@/components/ui/button";
+import { readPiiPreference } from "@/components/chat/PiiProtectionToggle";
+import { useQuery } from "@tanstack/react-query";
 
 type Props = {
   review: TabularReview;
@@ -46,6 +48,11 @@ export function TRChatPanel({ review, workspaceId, onClose, onCellRefClick }: Pr
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { data: appSettings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => picardApi.getSettings(),
+  });
+  const piiEnabled = readPiiPreference(appSettings?.enable_pii_protection_default ?? true);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +100,8 @@ export function TRChatPanel({ review, workspaceId, onClose, onCellRefClick }: Pr
         message: text,
         document_ids: review.document_ids,
         tabular_review_id: review.id,
+        enable_pii_protection:
+          appSettings?.llm_provider === "ollama" ? false : piiEnabled,
       })) {
         if (ev.event === "content" && "delta" in ev) {
           assistant += ev.delta;

@@ -314,6 +314,16 @@ def map_document_to_brief(
         metadata_block=meta,
         agent_deep=agent_deep,
     )
+    from app.services.pii_proxy import batch_register_texts, get_active_proxy
+
+    proxy = get_active_proxy()
+    if proxy is not None:
+        texts = [query, meta, prompt]
+        for ref in citation_map.refs:
+            if ref.preview:
+                texts.append(ref.preview)
+        batch_register_texts(proxy, texts)
+
     messages = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": query},

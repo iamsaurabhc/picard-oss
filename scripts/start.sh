@@ -69,7 +69,7 @@ fi
     echo "ERROR: picard-backend still owns port 8000. Quit Picard.Law OSS.app, then re-run ./scripts/start.sh" >&2
     exit 1
   fi
-  uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+  uvicorn app.main:app --reload --reload-exclude '.venv/*' --host 127.0.0.1 --port 8000
 ) &
 
 (

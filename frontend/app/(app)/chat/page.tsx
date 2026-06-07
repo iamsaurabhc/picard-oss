@@ -32,6 +32,12 @@ import { resolveCitationForClaim } from "@/lib/citationAnchor";
 import { useRequestTimer } from "@/hooks/useRequestTimer";
 import { isDevTestMode } from "@/lib/featureFlags";
 import { cn } from "@/lib/utils";
+import {
+  PiiInfoBanner,
+  PiiProtectionToggle,
+  PII_INFO_DISMISSED_KEY,
+  readPiiPreference,
+} from "@/components/chat/PiiProtectionToggle";
 
 type UiMessage = {
   id?: string;
@@ -116,6 +122,8 @@ export default function ChatPage() {
   const [chatMode, setChatMode] = useState<"rag" | "agent">(
     modeParam === "agent" ? "agent" : "rag"
   );
+  const [piiEnabled, setPiiEnabled] = useState(true);
+  const [piiInfoDismissed, setPiiInfoDismissed] = useState(true);
 
   const { data: appSettings } = useQuery({
     queryKey: ["settings"],
@@ -126,6 +134,14 @@ export default function ChatPage() {
   const agentChatReady = agentModeOn && agentPackReady;
   const effectiveMode: "rag" | "agent" =
     isDevTestMode && chatMode === "agent" ? "agent" : "rag";
+
+  useEffect(() => {
+    if (!appSettings) return;
+    const defaultOn =
+      appSettings.enable_pii_protection_default ?? true;
+    setPiiEnabled(readPiiPreference(defaultOn));
+    setPiiInfoDismissed(localStorage.getItem(PII_INFO_DISMISSED_KEY) === "true");
+  }, [appSettings]);
 
   const { data: documents } = useQuery({
     queryKey: ["documents", ws],
@@ -412,6 +428,8 @@ export default function ChatPage() {
       mode: effectiveMode,
       document_ids: documentIds.length ? documentIds : undefined,
       approval_token: extra?.approval_token,
+      enable_pii_protection:
+        appSettings?.llm_provider === "ollama" ? false : piiEnabled,
     })) {
       const errMsg =
         ev.event === "error"
@@ -577,6 +595,15 @@ export default function ChatPage() {
           selectedIds={scopedDocumentIds}
           onChange={setDocumentIds}
         />
+        {appSettings ? (
+          <PiiProtectionToggle
+            llmProvider={appSettings.llm_provider}
+            defaultEnabled={appSettings.enable_pii_protection_default ?? true}
+            disabled={streaming}
+            enabled={piiEnabled}
+            onChange={setPiiEnabled}
+          />
+        ) : null}
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">
@@ -854,6 +881,20 @@ export default function ChatPage() {
                   <ToolTimeline steps={agentActivity.toolSteps} />
                 </div>
               ) : null}
+            </div>
+            <div className="border-t border-neutral-200 px-4 pt-3">
+              <PiiInfoBanner
+                visible={
+                  !!appSettings &&
+                  appSettings.llm_provider !== "ollama" &&
+                  piiEnabled &&
+                  !piiInfoDismissed
+                }
+                onDismiss={() => {
+                  localStorage.setItem(PII_INFO_DISMISSED_KEY, "true");
+                  setPiiInfoDismissed(true);
+                }}
+              />
             </div>
             <form onSubmit={onSend} className="flex gap-2 border-t border-neutral-200 p-4">
               <Input

@@ -5,8 +5,30 @@ from enum import Enum
 from typing import Any
 
 from app.config import settings
+from app.services.pii_proxy import get_active_proxy, should_pii_protect
 
 logger = logging.getLogger(__name__)
+
+
+def _prepare_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    proxy = get_active_proxy()
+    if proxy is None or not should_pii_protect():
+        return messages
+    return proxy.anonymize_messages(messages)
+
+
+def _restore_text(text: str) -> str:
+    proxy = get_active_proxy()
+    if proxy is None or not should_pii_protect():
+        return text
+    return proxy.restore(text)
+
+
+def _restore_stream_chunk(chunk: str) -> str:
+    proxy = get_active_proxy()
+    if proxy is None or not should_pii_protect():
+        return chunk
+    return proxy.restore_stream_chunk(chunk)
 
 
 class ModelRole(str, Enum):
@@ -91,9 +113,12 @@ def completion(
             kwargs["api_key"] = key
         if response_format:
             kwargs["response_format"] = response_format
+        kwargs["messages"] = _prepare_messages(messages)
         response = litellm.completion(**kwargs)
         content = response.choices[0].message.content
-        return content.strip() if content else None
+        if not content:
+            return None
+        return _restore_text(content.strip())
     except Exception as exc:
         logger.warning("litellm completion failed: %s", exc)
         return None
@@ -125,11 +150,19 @@ async def stream_completion(
         }
         if key:
             kwargs["api_key"] = key
+        kwargs["messages"] = _prepare_messages(messages)
         response = await litellm.acompletion(**kwargs)
         async for chunk in response:
             delta = chunk.choices[0].delta.content
             if delta:
-                yield delta
+                restored = _restore_stream_chunk(delta)
+                if restored:
+                    yield restored
+        proxy = get_active_proxy()
+        if proxy is not None and should_pii_protect():
+            tail = proxy.flush_stream()
+            if tail:
+                yield tail
     except Exception as exc:
         logger.warning("litellm stream failed: %s", exc)
         yield f"[Error: {exc}]"

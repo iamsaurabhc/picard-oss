@@ -11,6 +11,7 @@ from app.config import settings
 from app.services.agent_pack import agent_pack_available, reset_agent_pack_probe
 from app.services.entity_extraction.ner.gliner_engine import ner_available
 from app.services.parse_plan import check_paddleocr_server
+from app.services.pii_proxy import _presidio_ready
 
 
 def _gliner_model_path() -> Path:
@@ -50,6 +51,15 @@ def list_components() -> list[dict[str, Any]]:
             "install_hint": "Set LITEPARSE_OCR_SERVER_URL in Settings, then: docker compose --profile ocr up -d paddleocr",
         },
         {
+            "id": "pii",
+            "name": "PII protection (Presidio)",
+            "description": "Enhanced name/location detection for cloud LLM masking. Regex fallback works without this pack.",
+            "installed": _presidio_ready(),
+            "running": _presidio_ready(),
+            "optional": True,
+            "install_hint": "pip install -r requirements-pii.txt && python -m spacy download en_core_web_sm",
+        },
+        {
             "id": "gliner",
             "name": "GLiNER entity model",
             "description": "Local NER for entity index. Skipping uses SLM + regex extraction.",
@@ -87,6 +97,34 @@ def install_component(component_id: str) -> dict[str, Any]:
                 ),
             }
         return {"ok": True, "message": "Agent pack installed"}
+    if component_id == "pii":
+        req = Path(__file__).resolve().parents[2] / "requirements-pii.txt"
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", str(req)],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            cwd=str(req.parent),
+        )
+        if proc.returncode != 0:
+            return {"ok": False, "message": proc.stderr or proc.stdout or "pip install failed"}
+        spacy_proc = subprocess.run(
+            [sys.executable, "-m", "spacy", "download", settings.pii_spacy_model or "en_core_web_sm"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if spacy_proc.returncode != 0:
+            return {
+                "ok": False,
+                "message": spacy_proc.stderr or spacy_proc.stdout or "spacy model download failed",
+            }
+        from app.services import pii_proxy as pii_mod
+
+        pii_mod._presidio_checked = False
+        if not _presidio_ready():
+            return {"ok": False, "message": "PII pack installed but Presidio still unavailable in this process"}
+        return {"ok": True, "message": "PII protection pack installed"}
     if component_id == "gliner":
         if not _ml_installed():
             return {

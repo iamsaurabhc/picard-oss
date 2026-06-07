@@ -374,6 +374,18 @@ def generate_column_prompt(
     *,
     idea: str | None = None,
 ) -> tuple[str, bool, str]:
+    from app.services.pii_proxy import pii_enabled_for_settings_default, pii_request_scope
+
+    with pii_request_scope(enabled=pii_enabled_for_settings_default()):
+        return _generate_column_prompt_body(label, fmt, idea=idea)
+
+
+def _generate_column_prompt_body(
+    label: str,
+    fmt: str | None = None,
+    *,
+    idea: str | None = None,
+) -> tuple[str, bool, str]:
     from app.services.model_router import ModelRole, completion
     from app.tabular.presets import match_preset, preset_prompt_for_label
 

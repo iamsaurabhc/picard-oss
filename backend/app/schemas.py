@@ -193,6 +193,7 @@ class ChatStreamRequest(BaseModel):
     workflow_id: str | None = None
     agent_run_id: str | None = None
     approval_token: str | None = None
+    enable_pii_protection: bool = True
 
 
 class AgentRunOut(BaseModel):
