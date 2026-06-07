@@ -49,27 +49,40 @@ export function PiiProtectionToggle({
     ? "Not needed — your LLM runs locally on your machine."
     : "Mask names, emails, phones, and IDs before sending to cloud LLMs; restore them in answers. Helps with GDPR, DPDPA, and client confidentiality.";
 
+  const active = enabled && !isOllama;
+
   return (
-    <div className="relative flex items-center gap-1.5">
+    <div
+      className={cn(
+        "group relative flex items-center gap-1.5 rounded-md border px-2 py-1 shadow-sm",
+        active
+          ? "border-blue-200/80 bg-blue-50/70"
+          : "border-neutral-200/80 bg-neutral-50/80",
+        effectiveDisabled && "opacity-70"
+      )}
+    >
       <button
         type="button"
-        className="rounded p-1 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
-        title={tooltip}
+        className={cn(
+          "rounded p-1 hover:bg-white/80 hover:text-neutral-800",
+          active ? "text-blue-700" : "text-neutral-500"
+        )}
         aria-label="PII protection info"
+        aria-describedby="pii-shield-tooltip"
         onClick={() => setShowInfo((v) => !v)}
       >
         <Shield className="h-4 w-4" />
       </button>
       <label
         className={cn(
-          "flex cursor-pointer items-center gap-1.5 text-xs text-neutral-600",
-          effectiveDisabled && "cursor-not-allowed opacity-60"
+          "flex cursor-pointer items-center gap-1.5 text-xs",
+          active ? "text-blue-900" : "text-neutral-600",
+          effectiveDisabled && "cursor-not-allowed"
         )}
-        title={tooltip}
       >
         <input
           type="checkbox"
-          checked={enabled && !isOllama}
+          checked={active}
           disabled={effectiveDisabled}
           onChange={(e) => {
             const next = e.target.checked;
@@ -79,8 +92,15 @@ export function PiiProtectionToggle({
         />
         <span>PII shield</span>
       </label>
+      <div
+        id="pii-shield-tooltip"
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-40 mt-1.5 hidden w-72 max-w-[calc(100vw-2rem)] rounded-md border border-neutral-200 bg-white p-3 text-xs leading-relaxed text-neutral-700 shadow-md group-hover:block group-focus-within:block"
+      >
+        {tooltip}
+      </div>
       {showInfo && !isOllama ? (
-        <div className="absolute left-0 top-full z-30 mt-1 max-w-xs rounded border border-neutral-200 bg-white p-3 text-xs text-neutral-700 shadow-md">
+        <div className="absolute right-0 top-full z-30 mt-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-neutral-200 bg-white p-3 text-xs leading-relaxed text-neutral-700 shadow-md">
           <p className="font-medium text-neutral-900">Private data protection</p>
           <p className="mt-1">
             Before your question and document excerpts reach OpenAI or Anthropic, Picard replaces
