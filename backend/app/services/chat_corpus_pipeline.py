@@ -28,14 +28,14 @@ from app.services.listing_map_reduce import (
     should_use_listing_map_reduce,
 )
 from app.services.retrieval_progress import RetrievalProgressEmitter, consume_retrieval_generator
-from app.services.overview_retrieval import overview_retrieve
+from app.services.overview_retrieval import _effective_case_terms, overview_retrieve
 from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retrieve
 from app.services.agent_retrieval_policy import (
     apply_policy_to_understanding,
     build_agent_retrieval_policy,
     routing_flags_from_policy,
 )
-from app.services.query_understanding import understand_query, understanding_summary, _case_name_terms
+from app.services.query_understanding import understand_query, understanding_summary
 from app.services.retrieval_depth import depth_policy_to_diagnostics, resolve_retrieval_depth
 from app.services.search import execute_search
 
@@ -199,7 +199,7 @@ def _retrieve_for_chat_body(
     scoped_document_ids = list(body.document_ids) if body.document_ids else None
 
     if out.is_overview:
-        case_terms = _case_name_terms(body.message) or understanding.fts.must_terms[:2]
+        case_terms = _effective_case_terms(body.message, understanding) or understanding.fts.must_terms[:2]
         if case_terms:
             resolved = resolve_case_document_ids(
                 db,

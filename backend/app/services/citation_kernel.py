@@ -367,6 +367,7 @@ def _validate_and_judge(
     answer: str,
     citation_map: CitationMap,
     *,
+    query: str,
     intent: str,
     search_mode: str,
     allow_partial_disclosure: bool,
@@ -377,6 +378,7 @@ def _validate_and_judge(
         mode=search_mode,
         allow_partial_disclosure=allow_partial_disclosure,
         intent=intent,
+        query=query,
     )
     judge_result = judge_citations(validated, citation_map, intent=intent)
     validated = _apply_judge_fail_closed(validated, judge_result, intent)
@@ -462,6 +464,7 @@ async def run_corpus_evidence_step(
     validated, validation, judge_result = _validate_and_judge(
         raw_answer,
         citation_map,
+        query=query,
         intent=intent,
         search_mode=search_mode,
         allow_partial_disclosure=allow_partial_disclosure,
@@ -554,6 +557,7 @@ async def stream_corpus_evidence_step(
     validated, validation, judge_result = _validate_and_judge(
         full_answer,
         cmap,
+        query=query,
         intent=intent,
         search_mode=search_mode,
         allow_partial_disclosure=allow_partial_disclosure,

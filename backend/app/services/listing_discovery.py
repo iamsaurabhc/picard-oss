@@ -96,7 +96,10 @@ def discover_documents_from_party_fts(
     party_tokens = _party_name_tokens(understanding)
 
     if len(party_tokens) >= 2:
-        and_terms = " AND ".join(party_tokens[:2])
+        and_plan = FtsPlan(must_terms=party_tokens[:2], operator="AND")
+        and_terms = build_fts_match_string(
+            and_plan, raw_query_fallback=" ".join(party_tokens[:2])
+        )
         for doc_id, cnt in fts_discover_documents(
             db,
             fts_query=and_terms,
@@ -107,7 +110,10 @@ def discover_documents_from_party_fts(
             per_doc[doc_id] = max(per_doc[doc_id], _PARTY_FTS_DISCOVERY_BOOST + cnt)
 
     if match_tokens:
-        or_terms = " OR ".join(match_tokens[:6])
+        or_plan = FtsPlan(must_terms=match_tokens[:6], operator="OR")
+        or_terms = build_fts_match_string(
+            or_plan, raw_query_fallback=" ".join(match_tokens[:6])
+        )
         token_rows = fts_discover_documents(
             db,
             fts_query=or_terms,

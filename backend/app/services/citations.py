@@ -25,6 +25,18 @@ _DATE_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_CASE_V_IN_TEXT_RE = re.compile(
+    r"\b((?:[A-Z][\w']+)(?:\s+(?:[A-Z][\w']+|of|the)){0,3})\s+v\.?\s+"
+    r"([A-Z][\w']+(?:\s+(?:Corporation|Corp|Council|Brothers|Bros|Municipality|Co)[\w']*)*)",
+)
+_WORD_RE = re.compile(r"[A-Za-z']+")
+_BEFORE_V_STOPWORDS = frozenset(
+    {
+        "the", "that", "this", "than", "case", "court", "stronger", "including", "cited",
+        "see", "noted", "where", "when", "if", "as", "and", "or", "but", "for", "with",
+        "from", "into", "such", "other", "cases", "also", "held", "said", "held",
+    }
+)
 
 
 @dataclass
@@ -534,6 +546,10 @@ def build_system_prompt(
             "is described (e.g. under investigation), state that stage with a citation.",
             "- State amounts, dates, and party names ONLY when present in cited excerpts — never invent.",
             "- Do NOT write 'various legal precedents' without naming them from a cited source.",
+            "- Use the **exact case-name spelling from source excerpts** in all factual statements — "
+            "never echo the user's query spelling when it differs from sources.",
+            "- If the user misspelled a cited case, note that once at the start using the source spelling only; "
+            "do not use the incorrect spelling anywhere in the answer body.",
             "- If a section lacks evidence, write: 'Sources do not specify [topic].'",
             "- Do not invent citation numbers.",
             "- For Damages / relief sought and Dates & procedural history, cite the source blocks under those headings.",
@@ -577,6 +593,8 @@ def build_system_prompt(
             "Every factual sentence MUST include an inline citation [N] matching the source list.",
             "When the user asks multiple sub-questions, answer each sub-part separately (use bullets or short paragraphs).",
             "When sources contain relevant evidence, answer substantively — do not claim sources lack all information.",
+            "Use the exact case-name spelling from source excerpts — never echo the user's misspelled query form.",
+            "If the user misspelled a cited case, note that once at the start using the source spelling only.",
             "If sources support some sub-questions but not others, answer what you can and write "
             "'Sources do not specify [topic]' for each unsupported sub-part.",
             "Do not invent citation numbers.",
@@ -679,6 +697,162 @@ def _fact_verify_and_strip(cleaned: str, citation_map: CitationMap) -> tuple[str
     return "\n\n".join(out_paras), stripped
 
 
+def _normalize_case_party_a(party_a: str) -> str | None:
+    words = party_a.split()
+    if not words:
+        return None
+    if len(words) <= 4 and not any(w.casefold() in _BEFORE_V_STOPWORDS for w in words):
+        return party_a.strip()
+    good = [w for w in words if w[:1].isupper() and w.casefold() not in _BEFORE_V_STOPWORDS]
+    if not good:
+        return None
+    return good[-1]
+
+
+def _source_case_canonical_tokens(citation_map: CitationMap) -> dict[str, str]:
+    """casefold token -> authoritative surface form from source previews."""
+    canonical: dict[str, str] = {}
+    for ref in citation_map.refs:
+        text = ref.preview or ""
+        for match in _CASE_V_IN_TEXT_RE.finditer(text):
+            party_a = _normalize_case_party_a(match.group(1).strip())
+            party_b = match.group(2).strip()
+            if not party_a:
+                continue
+            for word in _WORD_RE.findall(f"{party_a} {party_b}"):
+                if len(word) >= 3:
+                    key = word.casefold()
+                    if key not in canonical or (word[:1].isupper() and not canonical[key][:1].isupper()):
+                        canonical[key] = word
+        for word in _WORD_RE.findall(text):
+            if len(word) >= 4 and word[:1].isupper():
+                key = word.casefold()
+                if key not in canonical:
+                    canonical[key] = word
+    return canonical
+
+
+def _source_case_citations(citation_map: CitationMap) -> list[str]:
+    """Full 'Party v Party' strings from source previews, longest first."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for ref in citation_map.refs:
+        for match in _CASE_V_IN_TEXT_RE.finditer(ref.preview or ""):
+            party_a = _normalize_case_party_a(match.group(1).strip())
+            party_b = match.group(2).strip()
+            if not party_a:
+                continue
+            cite = f"{party_a} v {party_b}"
+            key = cite.casefold()
+            if key not in seen:
+                seen.add(key)
+                found.append(cite)
+    return sorted(found, key=len)
+
+
+def _same_length_one_edit(a: str, b: str) -> bool:
+    if len(a) != len(b):
+        return False
+    return sum(x != y for x, y in zip(a, b)) == 1
+
+
+def _source_replacement_for_query_token(
+    query_cf: str,
+    source_canonical: dict[str, str],
+) -> str | None:
+    if query_cf in source_canonical:
+        return None
+    for i, c in enumerate(query_cf):
+        if c == "v":
+            alt = query_cf[:i] + "w" + query_cf[i + 1 :]
+            if alt in source_canonical:
+                return source_canonical[alt]
+        elif c == "w":
+            alt = query_cf[:i] + "v" + query_cf[i + 1 :]
+            if alt in source_canonical:
+                return source_canonical[alt]
+    for src_cf, display in source_canonical.items():
+        if _same_length_one_edit(query_cf, src_cf):
+            return display
+    return None
+
+
+def _query_party_surfaces(query: str) -> list[tuple[str, str]]:
+    from app.services.query_understanding import _case_name_terms
+
+    terms = _case_name_terms(query) or []
+    surfaces: list[tuple[str, str]] = []
+    for term in terms:
+        m = re.search(rf"\b({re.escape(term)})\b", query, re.IGNORECASE)
+        surface = m.group(1) if m else term.title()
+        surfaces.append((term.casefold(), surface))
+    return surfaces
+
+
+def _align_case_names_to_sources(
+    answer: str,
+    citation_map: CitationMap,
+    *,
+    query: str = "",
+) -> tuple[str, int]:
+    """Replace query-echo misspellings with spellings proven in source previews."""
+    source_canonical = _source_case_canonical_tokens(citation_map)
+    if not source_canonical:
+        return answer, 0
+
+    replacements = 0
+    aligned = answer
+    for query_cf, query_surface in _query_party_surfaces(query):
+        if query_cf in source_canonical:
+            continue
+        replacement = _source_replacement_for_query_token(query_cf, source_canonical)
+        if not replacement:
+            continue
+        pattern = re.compile(rf"\b{re.escape(query_surface)}\b", re.IGNORECASE)
+        new_text, n = pattern.subn(replacement, aligned)
+        if n:
+            aligned = new_text
+            replacements += n
+
+    source_cites = _source_case_citations(citation_map)
+    if query and source_cites:
+        q_terms = {t for t, _ in _query_party_surfaces(query)}
+        for cite in source_cites:
+            cite_tokens = {w.casefold() for w in _WORD_RE.findall(cite) if len(w) >= 3}
+            if not q_terms & cite_tokens:
+                continue
+            user_cite_match = re.search(
+                rf"\b({'|'.join(re.escape(s) for _, s in _query_party_surfaces(query))})"
+                rf"\s+v\.?\s+([\w']+(?:\s+[\w']+)*)",
+                aligned,
+                re.IGNORECASE,
+            )
+            if user_cite_match:
+                wrong = user_cite_match.group(0)
+                if wrong.casefold() != cite.casefold() and wrong.casefold() not in {
+                    c.casefold() for c in source_cites
+                }:
+                    aligned = aligned.replace(wrong, cite, 1)
+                    replacements += 1
+            break
+
+    if replacements and query:
+        q_terms = {t for t, _ in _query_party_surfaces(query)}
+        matching = [
+            c for c in source_cites
+            if q_terms & {w.casefold() for w in _WORD_RE.findall(c)}
+        ]
+        primary_cite = min(matching, key=len) if matching else (source_cites[0] if source_cites else None)
+        if primary_cite and "Note:" not in aligned[:200]:
+            note = (
+                f"**Note:** Sources refer to **{primary_cite}** "
+                f"(not the spelling used in your query).\n\n"
+            )
+            aligned = note + aligned
+
+    return aligned, replacements
+
+
 def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int]:
     """Rewrite each cited sentence to the ref index that best supports its claim."""
     from app.services.citation_binding import OVERLAP_THRESHOLD, best_ref_index_for_claim
@@ -727,6 +901,7 @@ def validate_response(
     mode: str = "SIMPLE",
     allow_partial_disclosure: bool = False,
     intent: str | None = None,
+    query: str = "",
 ) -> tuple[str, CitationValidation]:
     valid_indices = {r.index for r in citation_map.refs}
     stripped = 0
@@ -743,6 +918,7 @@ def validate_response(
         return ""
 
     cleaned = MARKER_RE.sub(_replace_invalid, answer)
+    cleaned, _ = _align_case_names_to_sources(cleaned, citation_map, query=query)
     if preserve_structure:
         if intent in {"case_overview", "entity_matter_listing"}:
             cleaned, reassigned = _reassign_markers(cleaned, citation_map)

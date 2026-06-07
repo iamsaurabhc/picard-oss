@@ -20,6 +20,32 @@ from app.services.query_understanding import (
 from app.services.retrieval_progress import RetrievalProgressEmitter
 
 
+_INVALID_CASE_PARTY_TOKENS = frozenset(
+    {
+        "summarize", "summarise", "summary", "passage", "passages", "discussing",
+        "every", "across", "judgment", "mentioning", "plaintiff", "defendant",
+        "informant", "context", "details", "detail", "case", "court", "facts",
+    }
+)
+
+
+def _effective_case_terms(query: str, understanding: QueryUnderstanding) -> list[str]:
+    """Party tokens for document scoping — reject overview framing words as party names."""
+    raw = _case_name_terms(query) or []
+    if raw and all(t.casefold() not in _INVALID_CASE_PARTY_TOKENS for t in raw):
+        return raw
+    alt = [
+        t.casefold()
+        for t in understanding.fts.must_terms[:2]
+        if t and t.casefold() not in _INVALID_CASE_PARTY_TOKENS
+    ]
+    if len(alt) >= 2:
+        return alt
+    if raw:
+        return raw
+    return alt
+
+
 def _discover_overview_documents(
     db: Session,
     understanding: QueryUnderstanding,
@@ -61,7 +87,7 @@ def overview_retrieve_with_progress(
 ) -> Iterator[dict]:
     """Multi-pass or page-level retrieval optimized for case overview breadth."""
     progress = emitter or RetrievalProgressEmitter()
-    case_terms = _case_name_terms(query) or list(understanding.fts.must_terms[:2])
+    case_terms = _effective_case_terms(query, understanding)
     discovery_diag: dict = {}
     party_scoped = (
         not _case_name_terms(query)
@@ -96,6 +122,9 @@ def overview_retrieve_with_progress(
             document_ids,
         )
         target_docs = list(scoped_ids or document_ids or [])
+
+    if not target_docs and document_ids:
+        target_docs = list(document_ids)
 
     if (
         target_docs

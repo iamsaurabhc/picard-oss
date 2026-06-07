@@ -7,6 +7,62 @@ from app.services.fts_query_builder import build_fts_match_string
 from app.services.fts_search import fts_search
 from app.services.query_understanding import FtsPlan
 
+_INVALID_CASE_PARTY_TOKENS = frozenset(
+    {
+        "summarize", "summarise", "summary", "passage", "passages", "discussing",
+        "every", "across", "judgment", "mentioning", "plaintiff", "defendant",
+        "informant", "context", "details", "detail", "case", "court", "facts",
+    }
+)
+
+
+def _party_token_variants(term: str) -> list[str]:
+    """Near-miss spellings for cited party tokens (e.g. ovens/owens)."""
+    t = term.casefold()
+    variants = [t]
+    # Prioritize common v/w OCR confusions in case names before generic edits.
+    for i, c in enumerate(t):
+        if c == "v":
+            swapped = t[:i] + "w" + t[i + 1:]
+            if swapped not in variants:
+                variants.insert(1, swapped)
+        elif c == "w":
+            swapped = t[:i] + "v" + t[i + 1:]
+            if swapped not in variants:
+                variants.insert(1, swapped)
+    if len(t) < 4:
+        return variants
+    for i, c in enumerate(t):
+        for alt in "aeiou":
+            if alt == c:
+                continue
+            candidate = t[:i] + alt + t[i + 1:]
+            if candidate not in variants:
+                variants.append(candidate)
+            if len(variants) >= 10:
+                return variants
+    return variants
+
+
+def _fts_case_cooccurrence_hits(
+    db: Session,
+    *,
+    workspace_id: str,
+    case_terms: list[str],
+    document_ids: list[str] | None,
+) -> list:
+    plan = FtsPlan(must_terms=case_terms[:2], operator="AND")
+    fts_q = build_fts_match_string(plan, raw_query_fallback=" ".join(case_terms))
+    return fts_search(
+        db,
+        query=" ".join(case_terms),
+        fts_query=fts_q,
+        workspace_id=workspace_id,
+        document_ids=document_ids,
+        top_k=40,
+        max_chunks_per_doc=6,
+    )
+
 
 def _fuzzy_expand_case_terms(
     db: Session,
@@ -43,32 +99,26 @@ def resolve_case_document_ids(
     if document_ids is not None and len(document_ids) <= 1:
         return document_ids
 
-    plan = FtsPlan(must_terms=case_terms[:2], operator="AND")
-    fts_q = build_fts_match_string(plan, raw_query_fallback=" ".join(case_terms))
-    hits = fts_search(
-        db,
-        query=" ".join(case_terms),
-        fts_query=fts_q,
-        workspace_id=workspace_id,
-        document_ids=document_ids,
-        top_k=40,
-        max_chunks_per_doc=6,
+    hits = _fts_case_cooccurrence_hits(
+        db, workspace_id=workspace_id, case_terms=case_terms, document_ids=document_ids,
     )
+    if not hits:
+        for variant in _party_token_variants(case_terms[0]):
+            if variant == case_terms[0]:
+                continue
+            alt_terms = [variant, case_terms[1]]
+            hits = _fts_case_cooccurrence_hits(
+                db, workspace_id=workspace_id, case_terms=alt_terms, document_ids=document_ids,
+            )
+            if hits:
+                break
     if not hits:
         fuzzy = _fuzzy_expand_case_terms(db, workspace_id, case_terms, document_ids)
         if fuzzy:
             return fuzzy
         reversed_terms = [case_terms[1], case_terms[0]]
-        plan_rev = FtsPlan(must_terms=reversed_terms, operator="AND")
-        fts_rev = build_fts_match_string(plan_rev, raw_query_fallback=" ".join(reversed_terms))
-        hits = fts_search(
-            db,
-            query=" ".join(reversed_terms),
-            fts_query=fts_rev,
-            workspace_id=workspace_id,
-            document_ids=document_ids,
-            top_k=40,
-            max_chunks_per_doc=6,
+        hits = _fts_case_cooccurrence_hits(
+            db, workspace_id=workspace_id, case_terms=reversed_terms, document_ids=document_ids,
         )
         if not hits:
             return _fuzzy_expand_case_terms(db, workspace_id, reversed_terms, document_ids) or document_ids

@@ -2,6 +2,18 @@ from app.config import settings
 from app.services.query_understanding import _case_name_terms, understand_query
 
 
+def test_case_name_terms_citation_passage_query():
+    terms = _case_name_terms(
+        "Summarize every passage discussing Ovens v Liverpool across the judgment"
+    )
+    assert terms == ["ovens", "liverpool"]
+
+    terms_h = _case_name_terms(
+        "Summarize every passage discussing Hambrook v Stokes across the judgment"
+    )
+    assert terms_h == ["hambrook", "stokes"]
+
+
 def test_case_name_terms_lowercase_winzo_v_google():
     terms = _case_name_terms("list all case details on winzo games v google")
     assert terms is not None

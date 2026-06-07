@@ -330,6 +330,7 @@ export const PdfPageViewer = forwardRef<PdfPageViewerHandle, Props>(function Pdf
           pageNumber={pageNumber}
           width={pageWidth}
           renderTextLayer={false}
+          renderAnnotationLayer={false}
           onRenderSuccess={(pdfPage) => setPageHeight(pageNumber, pdfPage.height)}
         />
         {children?.({ pageWidth, pageHeight: height, pageNumber })}
@@ -374,6 +375,7 @@ export const PdfPageViewer = forwardRef<PdfPageViewerHandle, Props>(function Pdf
                 pageNumber={page}
                 width={pageWidth}
                 renderTextLayer={false}
+                renderAnnotationLayer={false}
                 onRenderSuccess={(pdfPage) => setPageHeight(page, pdfPage.height)}
               />
               {children?.({ pageWidth, pageHeight: singlePageHeight, pageNumber: page })}

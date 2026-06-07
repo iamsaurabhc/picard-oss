@@ -22,7 +22,7 @@ class FtsHit:
     score: float
 
 
-FTS_SPECIAL = re.compile(r'[*?:\()"\'\\]')
+FTS_SPECIAL = re.compile(r'[*?:\()"\'\\.\-]')
 STOPWORDS = frozenset(
     {
         "a",

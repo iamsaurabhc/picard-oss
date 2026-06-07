@@ -354,3 +354,35 @@ def test_references_for_api_without_cited_only_returns_all():
     cmap = build_citation_map(hits)
     refs = references_for_api(cmap, answer="Only [1].", cited_only=False)
     assert len(refs) == 2
+
+
+def test_validate_response_aligns_query_misspelling_to_source_case_name():
+    preview = (
+        "The court cited Owens v Liverpool Corporation as stronger authority on nervous shock "
+        "when a mother witnesses the death of her child [11]."
+    )
+    cmap = CitationMap(
+        refs=[
+            CitationRef(
+                index=11,
+                chunk_id="c11",
+                document_id="chester",
+                page=32,
+                bbox=None,
+                preview=preview,
+            ),
+        ],
+        chunk_id_to_index={"c11": 11},
+        bundle_chunk_ids={},
+    )
+    query = "Summarize every passage discussing Ovens v Liverpool"
+    answer = (
+        "The court referenced Ovens v Liverpool Corporation to support liability for nervous shock [11]."
+    )
+    cleaned, _ = validate_response(
+        answer, cmap, intent="case_overview", query=query,
+    )
+    assert "Ovens" not in cleaned
+    assert "Owens v Liverpool Corporation" in cleaned
+    assert "Note:" in cleaned
+    assert "not the spelling used in your query" in cleaned

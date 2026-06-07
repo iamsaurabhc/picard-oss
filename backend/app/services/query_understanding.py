@@ -210,8 +210,9 @@ _QUESTION_FRAMING_WORDS = frozenset(
 _CASE_QUERY_FRAMING = frozenset(
     {
         "list", "all", "case", "details", "detail", "on", "the", "involving", "about",
-        "show", "give", "tell", "summary", "sections", "section", "context", "dates",
-        "detailed", "comprehensive", "significant", "brief", "short", "of",
+        "show", "give", "tell", "summary", "summarize", "summarise", "sections", "section",
+        "context", "dates", "detailed", "comprehensive", "significant", "brief", "short", "of",
+        "passage", "passages", "discussing", "every", "across", "judgment", "mentioning",
     }
 )
 
@@ -1209,8 +1210,8 @@ def _case_name_terms(query: str) -> list[str] | None:
             ]
             party_a = (
                 left_keep[-1]
-                if left_keep[0] in _OVERVIEW_DEPTH_ADJECTIVES
-                else left_keep[0]
+                if len(left_keep) > 1 and left_keep[0] in _OVERVIEW_DEPTH_ADJECTIVES
+                else (left_keep[-1] if len(left_keep) == 1 else left_keep[0])
             )
             party_b = (right_keep or right)[0]
             return _dedupe_terms([party_a, party_b])
