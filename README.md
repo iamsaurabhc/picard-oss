@@ -91,6 +91,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/phase2-eval.md](d
 - `[media/](media/)` — Demo GIF (README) and source screen recording
 - `[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)` — Full design blueprint
 - [Eval metrics & quality gates](#eval-metrics--quality-gates) — R/C/F/CT/FG/AB IDs (CI + per-answer UI roadmap)
+- [Community](#community) — contributing, conduct, security, accessibility
 
 ---
 
@@ -560,6 +561,17 @@ Hosted product on unreleased modifications? [COMMERCIAL-LICENSE.md](COMMERCIAL-L
 | Forking or redistributing modified versions          | AGPL-3.0 — source to users; network use triggers AGPL for SaaS                 |
 | Production / hosted service without AGPL obligations | [Commercial license](COMMERCIAL-LICENSE.md) — [picard.law](https://picard.law) |
 
+
+---
+
+## Community
+
+- [Contributing](CONTRIBUTING.md) — dev setup, tests, eval, pull requests
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md) — report vulnerabilities privately
+- [Accessibility](ACCESSIBILITY.md) — goals, known limitations, how to report barriers
+
+Report bugs, feature ideas, retrieval regressions, and accessibility issues via [GitHub Issues](https://github.com/iamsaurabhc/picard-oss/issues).
 
 ---
 

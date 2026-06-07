@@ -1,0 +1,84 @@
+name: Accessibility report
+description: Report a barrier for keyboard, screen reader, or other assistive technology users
+title: "[A11y]: "
+labels: ["accessibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping make Picard OSS more accessible. See [ACCESSIBILITY.md](https://github.com/iamsaurabhc/picard-oss/blob/main/ACCESSIBILITY.md) for our commitment and known limitations.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Helps us prioritize time-sensitive blockers.
+      options:
+        - "Critical — prevents completing a core task (e.g. cannot verify citations)"
+        - "High — significant difficulty, workaround exists"
+        - "Medium — annoyance or inconsistent experience"
+        - "Low — minor issue with minimal impact"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: I should be able to Tab to each citation pill and activate it with Enter to jump to the PDF highlight.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: Focus skips citation pills; VoiceOver does not announce them as links.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Chat with a document that returns citations
+        2. Wait for answer to complete
+        3. Tab through the message
+    validations:
+      required: true
+
+  - type: input
+    id: page
+    attributes:
+      label: Page or workflow
+      placeholder: Chat, PDF viewer, Tabular review, Settings, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser, and assistive technology with version.
+      placeholder: |
+        macOS 15, Safari 18
+        VoiceOver (default)
+    validations:
+      required: true
+
+  - type: textarea
+    id: recording
+    attributes:
+      label: Screen recording or screenshots (optional)
+      description: Optional but helpful. Redact privileged document content.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing accessibility issues for duplicates
+          required: true
+        - label: I removed privileged document content from attachments
+          required: true

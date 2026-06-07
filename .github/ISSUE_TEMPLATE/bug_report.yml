@@ -1,0 +1,80 @@
+name: Bug report
+description: Something isn't working as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. For security vulnerabilities, see [SECURITY.md](https://github.com/iamsaurabhc/picard-oss/blob/main/SECURITY.md) — do not use this template.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: When I upload a PDF and search for "limitation of liability", no results appear even though the phrase is on page 3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      placeholder: Search should return the chunk containing that phrase.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start with `./scripts/start.sh`
+        2. Upload document X to workspace Y
+        3. Search for "..."
+        4. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Picard?
+      options:
+        - Dev (`./scripts/start.sh`)
+        - Docker Compose
+        - Desktop app (Tauri)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, app version from Settings, or git commit SHA.
+      placeholder: v0.1.0 or abc1234
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser (if UI), Python/Node versions if relevant.
+      placeholder: macOS 15, Chrome 131, Python 3.11
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Backend traceback, browser console, or screenshots. Redact sensitive document content.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues to avoid duplicates
+          required: true
+        - label: I removed API keys and privileged document content from this report
+          required: true

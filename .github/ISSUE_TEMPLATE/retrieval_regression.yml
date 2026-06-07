@@ -1,0 +1,84 @@
+name: Retrieval / citation regression
+description: Search, CARP, refuse gate, or citation mapping behaves incorrectly
+title: "[Retrieval]: "
+labels: ["retrieval"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when FTS5, CARP, refuse gates, or citation mapping regresses. Gold query IDs live in [`backend/eval/gold_labels.jsonl`](https://github.com/iamsaurabhc/picard-oss/blob/main/backend/eval/gold_labels.jsonl).
+
+  - type: textarea
+    id: query
+    attributes:
+      label: Query text
+      description: Exact search or chat query that fails.
+      placeholder: What damages did the court award Chester?
+    validations:
+      required: true
+
+  - type: input
+    id: gold_id
+    attributes:
+      label: Gold query ID (if known)
+      placeholder: chester_bench_001, chester_carp_002, chester_chat_ab01
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Retrieval mode
+      options:
+        - SIMPLE (BM25 / FTS5)
+        - CARP (multi-constraint)
+        - Chat (full pipeline)
+        - Tabular
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: Should retrieve page 12 chunk with damages amount; citation [1] should map to bbox on page 12.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: Refused despite evidence present / wrong page cited / CARP intersection empty.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workspace
+    attributes:
+      label: Workspace / corpus context
+      description: Document names, Chester corpus, custom upload, etc. Do not paste privileged content.
+      placeholder: Chester v Municipality of Waverly sample corpus, workspace "eval"
+
+  - type: textarea
+    id: eval_output
+    attributes:
+      label: Eval or pytest output
+      description: Output from `./scripts/eval-search.sh`, `pytest -m corpus`, or chat diagnostics JSON.
+      render: shell
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant settings
+      description: Non-secret flags from backend/.env if relevant.
+      placeholder: ENABLE_CARP=true, ENABLE_HYBRID_SEARCH=false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I ran or attempted `pytest -m corpus` for this scenario
+          required: false
+        - label: I did not include API keys or privileged document text in this report
+          required: true
