@@ -7,9 +7,11 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.db.models import Chunk
 from app.services.entity_index import (
     lookup_documents_for_party,
     lookup_documents_for_party_tokens,
+    lookup_pages_for_party_in_document,
     sanitize_party_canonicals,
 )
 from app.services.query_understanding import QueryUnderstanding, SearchPass
@@ -109,10 +111,11 @@ def discover_documents_from_party_fts(
         ):
             per_doc[doc_id] = max(per_doc[doc_id], _PARTY_FTS_DISCOVERY_BOOST + cnt)
 
-    if match_tokens:
-        or_plan = FtsPlan(must_terms=match_tokens[:6], operator="OR")
+    or_tokens = party_tokens or match_tokens[:6]
+    if or_tokens:
+        or_plan = FtsPlan(must_terms=or_tokens[:6], operator="OR")
         or_terms = build_fts_match_string(
-            or_plan, raw_query_fallback=" ".join(match_tokens[:6])
+            or_plan, raw_query_fallback=" ".join(or_tokens[:6])
         )
         token_rows = fts_discover_documents(
             db,
@@ -197,6 +200,66 @@ def discover_documents_from_fts(
         understanding=understanding,
         match_tokens=_target_match_tokens(understanding),
     )
+
+
+def _validate_discovered_documents(
+    db: Session,
+    doc_rows: list[tuple[str, int]],
+    *,
+    workspace_id: str,
+    understanding: QueryUnderstanding,
+    entity_ids: set[str],
+    token_entity_ids: set[str],
+    fts_ids: set[str],
+) -> tuple[list[tuple[str, int]], int, int]:
+    """Drop FTS-only docs that don't actually mention the target party.
+
+    Returns (validated_rows, validated_count, dropped_count).
+    """
+    from app.services.entity_page_context import party_canonicals_from_understanding
+
+    fts_only_ids = fts_ids - entity_ids - token_entity_ids
+    if not fts_only_ids:
+        return doc_rows, 0, 0
+
+    party_canonicals = party_canonicals_from_understanding(understanding)
+    party_tokens = _party_name_tokens(understanding)
+
+    validated_rows: list[tuple[str, int]] = []
+    validated_count = 0
+    dropped_count = 0
+    for doc_id, score in doc_rows:
+        if doc_id not in fts_only_ids:
+            validated_rows.append((doc_id, score))
+            continue
+
+        passes = False
+        if party_canonicals:
+            pages = lookup_pages_for_party_in_document(
+                db, workspace_id, doc_id, party_canonicals,
+            )
+            if pages:
+                passes = True
+
+        if not passes and party_tokens:
+            from sqlalchemy import select as _select
+
+            stmt = _select(Chunk.text_content).where(Chunk.document_id == doc_id)
+            joined = " ".join(
+                t for t in db.execute(stmt).scalars().all() if t
+            ).casefold()
+            for token in party_tokens:
+                if token and token.casefold() in joined:
+                    passes = True
+                    break
+
+        if passes:
+            validated_rows.append((doc_id, score))
+            validated_count += 1
+        else:
+            dropped_count += 1
+
+    return validated_rows, validated_count, dropped_count
 
 
 def discover_listing_documents(
@@ -293,6 +356,16 @@ def discover_listing_documents(
             merged_scores[doc_id] = max(merged_scores.get(doc_id, 0), 1)
 
     doc_rows = sorted(merged_scores.items(), key=lambda x: -x[1])
+
+    doc_rows, fts_only_validated, fts_only_dropped = _validate_discovered_documents(
+        db,
+        doc_rows,
+        workspace_id=workspace_id,
+        understanding=understanding,
+        entity_ids=entity_ids,
+        token_entity_ids=token_entity_ids,
+        fts_ids=fts_ids,
+    )
     total_union = len(doc_rows)
     from app.services.query_understanding import _is_singular_case_details_query
 
@@ -310,5 +383,7 @@ def discover_listing_documents(
         "discovery_sources": sources,
         "documents_total_discovered": total_union,
         "documents_in_scope": len(document_ids) if document_ids else 0,
+        "fts_only_validated": fts_only_validated,
+        "fts_only_dropped": fts_only_dropped,
     }
     return doc_rows, diagnostics

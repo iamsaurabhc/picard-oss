@@ -11,6 +11,7 @@ from app.db.session import init_db
 from app.routers import (
     agent,
     chat,
+    document_status_sse,
     documents,
     prompts,
     search,
@@ -76,6 +77,7 @@ app.add_middleware(
 
 app.include_router(workspaces.router)
 app.include_router(documents.router)
+app.include_router(document_status_sse.router)
 app.include_router(search.router)
 app.include_router(agent.router)
 app.include_router(chat.router)

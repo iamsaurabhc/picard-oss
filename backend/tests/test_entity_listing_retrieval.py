@@ -39,6 +39,44 @@ def _seed_google_doc(db_session, ws_id: str, file_name: str, text: str) -> str:
     return doc_id
 
 
+def test_doc_hits_mention_target_filters_unrelated_hits():
+    from app.schemas import SearchHit
+    from app.services.entity_listing_retrieval import _doc_hits_mention_target
+
+    canonical = normalize_party("Google LLC")
+    understanding = QueryUnderstanding(
+        intent="entity_matter_listing",
+        target_entity=TargetEntity(
+            canonical=canonical,
+            surfaces=["Google"],
+            resolved_canonicals=[canonical],
+        ),
+    )
+
+    google_hit = SearchHit(
+        chunk_id="c1",
+        document_id="d1",
+        page_number=1,
+        text_content="Google LLC was named the opposite party.",
+        heading_path=None,
+        bbox=None,
+        score=1.0,
+    )
+    unrelated_hit = SearchHit(
+        chunk_id="c2",
+        document_id="d2",
+        page_number=1,
+        text_content="Chester v Municipality of Waverly — court discussed negligence in case details.",
+        heading_path=None,
+        bbox=None,
+        score=1.0,
+    )
+
+    assert _doc_hits_mention_target([google_hit], understanding) is True
+    assert _doc_hits_mention_target([unrelated_hit], understanding) is False
+    assert _doc_hits_mention_target([], understanding) is True
+
+
 def test_entity_listing_covers_multiple_documents(db_session):
     now = utc_now_iso()
     ws = Workspace(id=str(uuid.uuid4()), name="CCI", matter_ref=None, created_at=now, updated_at=now)

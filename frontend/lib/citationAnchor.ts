@@ -219,7 +219,11 @@ function bestBinding(
     const bestSameDoc = best
       ? best.candidate.sourceRef.document_id === preferRef.document_id
       : false;
-    if (!best || (sameDoc && !bestSameDoc) || hit.score > best.score) {
+    if (
+      !best ||
+      (sameDoc && !bestSameDoc) ||
+      (hit.score > best.score && (!bestSameDoc || sameDoc))
+    ) {
       best = hit;
     }
   }
@@ -318,6 +322,8 @@ export function resolveCitationForClaim(
 
   return {
     ...ref,
+    document_id: candidate.sourceRef.document_id ?? ref.document_id,
+    document_name: candidate.sourceRef.document_name ?? ref.document_name,
     chunk_id: candidate.chunk_id,
     page: candidate.page,
     bbox: nextBbox,

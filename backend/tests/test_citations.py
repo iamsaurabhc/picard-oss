@@ -340,6 +340,73 @@ def test_validate_response_reassigns_listing_intent_to_best_chunk_preview():
     assert validation.markers_reassigned == 1
 
 
+def test_validate_response_keeps_marker_in_same_document_for_listing():
+    """Cross-document refs must not steal markers when intent is structured listing."""
+    refs = [
+        CitationRef(
+            index=1,
+            chunk_id="d1_caption",
+            document_id="d1",
+            page=1,
+            bbox=None,
+            preview="686.pdf — caption page mentioning Google India Private Limited",
+            page_chunks=[
+                {"chunk_id": "d1_caption", "text": "686.pdf caption with Google India Private Limited", "page": 1},
+            ],
+        ),
+        CitationRef(
+            index=2,
+            chunk_id="d2_better",
+            document_id="d2",
+            page=1,
+            bbox=None,
+            preview=(
+                "Case No. 39 of 2018 Competition Commission of India — "
+                "this preview happens to overlap the claim more strongly"
+            ),
+            page_chunks=[
+                {
+                    "chunk_id": "d2_better",
+                    "text": (
+                        "Case No. 39 of 2018 Competition Commission of India — "
+                        "this preview happens to overlap the claim more strongly"
+                    ),
+                    "page": 1,
+                },
+            ],
+        ),
+        CitationRef(
+            index=3,
+            chunk_id="d1_body",
+            document_id="d1",
+            page=2,
+            bbox=None,
+            preview="Forum: Competition Commission of India, Case No. 39 of 2018",
+            page_chunks=[
+                {
+                    "chunk_id": "d1_body",
+                    "text": "Forum: Competition Commission of India, Case No. 39 of 2018",
+                    "page": 2,
+                },
+            ],
+        ),
+    ]
+    cmap = CitationMap(
+        refs=refs,
+        chunk_id_to_index={"d1_caption": 1, "d2_better": 2, "d1_body": 3},
+        bundle_chunk_ids={},
+    )
+    answer = (
+        "## 686.pdf\n"
+        "Forum: Competition Commission of India, Case No. 39 of 2018 [1]."
+    )
+    cleaned, validation = validate_response(
+        answer, cmap, intent="entity_matter_listing",
+    )
+    assert "[2]" not in cleaned
+    assert "[3]" in cleaned or "[1]" in cleaned
+
+
 def test_references_for_api_cited_only_filters_and_orders():
     hits = [_hit("c1"), _hit("c2"), _hit("c3")]
     cmap = build_citation_map(hits)

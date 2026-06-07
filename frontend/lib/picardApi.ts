@@ -519,6 +519,57 @@ async function request<T>(path: string, init?: RequestInit, options?: RequestOpt
   return res.json() as Promise<T>;
 }
 
+export type DocumentStatusEvent =
+  | { event: "status"; document_id: string; parse_status: string; progress?: number; parse_error?: string }
+  | { event: "indexing"; document_id: string; phase: string }
+  | { event: "ready"; document_id: string; chunk_count: number; page_count: number }
+  | { event: "error"; detail: string };
+
+function parseGenericSseBlock(block: string): DocumentStatusEvent | null {
+  let eventType = "message";
+  let data = "";
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) eventType = line.slice(6).trim();
+    else if (line.startsWith("data:")) data = line.slice(5).trim();
+  }
+  if (!data) return null;
+  try {
+    const parsed = JSON.parse(data) as Record<string, unknown>;
+    return { event: eventType, ...parsed } as DocumentStatusEvent;
+  } catch {
+    return null;
+  }
+}
+
+async function* parseGenericSseStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncGenerator<DocumentStatusEvent> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const ev = parseGenericSseBlock(block);
+        if (ev) yield ev;
+      }
+    }
+    if (done) {
+      buffer += decoder.decode(undefined, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      for (const block of buffer.split("\n\n")) {
+        const ev = parseGenericSseBlock(block);
+        if (ev) yield ev;
+      }
+      break;
+    }
+  }
+}
+
 function parseSseBlock(block: string): ChatStreamEvent | null {
   let eventType = "message";
   let data = "";
@@ -621,6 +672,15 @@ export const picardApi = {
   listChatMessages: (sessionId: string) =>
     request<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`),
   getAgentRun: (runId: string) => request<AgentRun>(`/agent/runs/${runId}`),
+  streamDocumentStatus: async function* (documentId: string): AsyncGenerator<DocumentStatusEvent> {
+    const res = await fetch(`${API_URL}/documents/${documentId}/status/stream`, {
+      headers: { Accept: "text/event-stream" },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    yield* parseGenericSseStream(reader);
+  },
   streamChat: async function* (
     body: ChatStreamRequest,
     onEvent?: (ev: ChatStreamEvent) => void

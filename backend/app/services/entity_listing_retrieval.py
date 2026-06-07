@@ -23,6 +23,52 @@ def _merge_pool(pool: dict, hits: list) -> None:
             pool[h.chunk_id] = h
 
 
+def _party_match_tokens(understanding: QueryUnderstanding) -> list[str]:
+    """Casefolded party name tokens (>=3 chars) from target + party constraints."""
+    tokens: list[str] = []
+    target = understanding.target_entity
+    if target:
+        tokens.extend(target.canonical.split())
+        for s in target.surfaces:
+            tokens.extend(s.split())
+        for c in target.resolved_canonicals or []:
+            tokens.extend(c.split())
+    for c in understanding.constraints:
+        if c.type == "party":
+            tokens.extend(c.canonical.split())
+            for s in c.surfaces:
+                tokens.extend(s.split())
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tokens:
+        key = t.casefold().strip()
+        if len(key) >= 3 and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _doc_hits_mention_target(hits: list, understanding: QueryUnderstanding) -> bool:
+    """True if any hit's text contains a party token (case-insensitive).
+
+    Returns True when there are no hits to evaluate or no party tokens known
+    (caller pre-checks ``if doc_hits and not _doc_hits_mention_target(...)``).
+    """
+    if not hits:
+        return True
+    tokens = _party_match_tokens(understanding)
+    if not tokens:
+        return True
+    for hit in hits:
+        text = (getattr(hit, "text_content", "") or "").casefold()
+        if not text:
+            continue
+        for token in tokens:
+            if token in text:
+                return True
+    return False
+
+
 def _apply_doc_quotas(
     hits: list,
     *,
@@ -201,6 +247,25 @@ def entity_listing_retrieve_with_progress(
             agent_deep=agent_deep,
         )
         pages_per_doc[doc_id] = page_diag.get("pages_selected") or []
+        if doc_hits and not _doc_hits_mention_target(doc_hits, understanding):
+            per_doc_hits[doc_id] = 0
+            yield progress.progress(
+                "page_rank",
+                "done",
+                document_id=doc_id,
+                document_name=doc_name,
+                pages_selected=pages_per_doc[doc_id],
+            )
+            yield progress.progress(
+                "search",
+                "done",
+                label="per_document",
+                document_id=doc_id,
+                document_name=doc_name,
+                hit_count=0,
+                pages_selected=pages_per_doc[doc_id],
+            )
+            continue
         for h in doc_hits:
             _merge_pool(pool, [h])
         per_doc_hits[doc_id] = len(doc_hits)

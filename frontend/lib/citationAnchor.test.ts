@@ -46,5 +46,78 @@ export function runCitationAnchorTests(): void {
     claim
   );
   assert.equal(sameChunk.bbox?.y0, 0.1);
+
+  // Same-doc preference: when a local same-doc match exists, do not let a
+  // higher-scoring cross-document hit override it.
+  const claim2 =
+    "Forum: Competition Commission of India, Case No. 39 of 2018 [2]";
+  const localRef: ChatReference = {
+    ...party,
+    index: 2,
+    document_id: "doc-686",
+    chunk_id: "local-686",
+    page_chunks: [
+      {
+        chunk_id: "local-686",
+        text: "Forum: Competition Commission of India, Case No. 39 of 2018 — appears in 686.pdf",
+        bbox: party.bbox,
+      },
+    ],
+  };
+  const crossDocRef: ChatReference = {
+    ...court,
+    index: 3,
+    document_id: "doc-133",
+    chunk_id: "cross-133",
+    page_chunks: [
+      {
+        chunk_id: "cross-133",
+        text:
+          "Forum: Competition Commission of India, Case No. 39 of 2018 — fuller phrasing from 133.pdf",
+        bbox: court.bbox,
+      },
+    ],
+  };
+  const resolved2 = resolveCitationForClaim(localRef, claim2, [
+    localRef,
+    crossDocRef,
+  ]);
+  assert.equal(resolved2.document_id, "doc-686");
+
+  // Cross-doc forced: when there is no usable local match, the returned ref
+  // propagates the candidate's document_id rather than keeping the original.
+  const emptyLocal: ChatReference = {
+    ...party,
+    index: 4,
+    document_id: "doc-686",
+    chunk_id: "empty-local",
+    preview: "unrelated boilerplate text without the claim content",
+    page_chunks: [
+      {
+        chunk_id: "empty-local",
+        text: "unrelated boilerplate text without the claim content",
+        bbox: party.bbox,
+      },
+    ],
+  };
+  const realCross: ChatReference = {
+    ...court,
+    index: 5,
+    document_id: "doc-133",
+    chunk_id: "real-cross",
+    page_chunks: [
+      {
+        chunk_id: "real-cross",
+        text:
+          "Forum: Competition Commission of India, Case No. 39 of 2018 — only match across the pool",
+        bbox: court.bbox,
+      },
+    ],
+  };
+  const resolved3 = resolveCitationForClaim(emptyLocal, claim, [
+    emptyLocal,
+    realCross,
+  ]);
+  assert.equal(resolved3.document_id, "doc-133");
 }
 

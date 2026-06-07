@@ -4,15 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Archive,
   Briefcase,
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
-  MessageSquare,
-  Search,
   Settings,
-  Table2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "@/lib/sidebarContext";
@@ -20,20 +16,6 @@ import { WorkspaceSelector } from "@/components/WorkspaceSelector";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (p: string) => p === "/" },
-  {
-    href: "/vault",
-    label: "Vault",
-    icon: Archive,
-    match: (p: string) => p === "/vault" || p.startsWith("/vault/"),
-  },
-  {
-    href: "/tabular",
-    label: "Tabular",
-    icon: Table2,
-    match: (p: string) => p === "/tabular" || p.startsWith("/tabular/"),
-  },
-  { href: "/search", label: "Search", icon: Search, match: (p: string) => p === "/search" || p.startsWith("/search/") },
-  { href: "/chat", label: "Chat", icon: MessageSquare, match: (p: string) => p === "/chat" || p.startsWith("/chat/") },
   { href: "/settings", label: "Settings", icon: Settings, match: (p: string) => p === "/settings" },
 ] as const;
 

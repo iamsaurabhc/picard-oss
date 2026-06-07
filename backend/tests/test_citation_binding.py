@@ -2,6 +2,7 @@ from app.services.citation_binding import (
     ChunkCandidate,
     best_chunk_for_claim,
     best_ref_index_for_claim,
+    best_ref_index_for_claim_scoped,
     ref_binding_surfaces,
 )
 from app.services.citations import CitationRef, CitationMap, references_for_api
@@ -107,6 +108,69 @@ def test_court_claim_prefers_case_number_chunk_over_commission_prose():
         "under case number 39 of 2018"
     )
     assert score_claim_to_chunk(claim, court) > score_claim_to_chunk(claim, informants)
+
+
+def test_best_ref_index_for_claim_scoped_restricts_to_document():
+    refs = [
+        CitationRef(
+            index=1,
+            chunk_id="party_d1",
+            document_id="d1",
+            page=1,
+            bbox=None,
+            preview="Google India Private Limited Opposite Party",
+            page_chunks=[
+                {"chunk_id": "party_d1", "text": "Google India Private Limited Opposite Party", "page": 1},
+            ],
+        ),
+        CitationRef(
+            index=2,
+            chunk_id="court_d2",
+            document_id="d2",
+            page=1,
+            bbox=None,
+            preview="Case No. 39 of 2018 Competition Commission of India",
+            page_chunks=[
+                {"chunk_id": "court_d2", "text": "Case No. 39 of 2018 Competition Commission of India", "page": 1},
+            ],
+        ),
+        CitationRef(
+            index=3,
+            chunk_id="court_d1",
+            document_id="d1",
+            page=2,
+            bbox=None,
+            preview="Case No. 39 of 2018 Competition Commission of India",
+            page_chunks=[
+                {"chunk_id": "court_d1", "text": "Case No. 39 of 2018 Competition Commission of India", "page": 2},
+            ],
+        ),
+    ]
+    claim = "The case is before the Competition Commission of India, Case No. 39 of 2018"
+    idx, score = best_ref_index_for_claim_scoped(claim, refs, restrict_document_id="d1")
+    assert idx == 3
+    assert score >= 0.25
+
+    idx_no_restrict, _ = best_ref_index_for_claim_scoped(claim, refs)
+    assert idx_no_restrict in {2, 3}
+
+
+def test_best_ref_index_for_claim_scoped_returns_none_for_missing_doc():
+    refs = [
+        CitationRef(
+            index=1,
+            chunk_id="c1",
+            document_id="d1",
+            page=1,
+            bbox=None,
+            preview="Some text about the case",
+        ),
+    ]
+    idx, score = best_ref_index_for_claim_scoped(
+        "Some text about the case", refs, restrict_document_id="missing",
+    )
+    assert idx is None
+    assert score == 0.0
 
 
 def test_references_for_api_includes_document_binding_chunks():

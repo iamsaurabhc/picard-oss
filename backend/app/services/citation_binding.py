@@ -164,6 +164,21 @@ def best_ref_index_for_claim(claim: str, refs: list) -> tuple[int | None, float]
     return best.index, score
 
 
+def best_ref_index_for_claim_scoped(
+    claim: str,
+    refs: list,
+    *,
+    restrict_document_id: str | None = None,
+) -> tuple[int | None, float]:
+    """Like best_ref_index_for_claim but restricted to refs in one document."""
+    if restrict_document_id is None:
+        return best_ref_index_for_claim(claim, refs)
+    scoped = [r for r in refs if getattr(r, "document_id", None) == restrict_document_id]
+    if not scoped:
+        return None, 0.0
+    return best_ref_index_for_claim(claim, scoped)
+
+
 def best_binding_for_claim(
     claim: str,
     refs: list,

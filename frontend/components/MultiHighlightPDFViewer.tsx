@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatReference } from "@/lib/picardApi";
 import { BboxOverlay } from "@/components/pdf/BboxOverlay";
-import { dedupeByBboxOverlap, isValidBbox } from "@/components/pdf/bbox-utils";
+import { dedupeByBboxOverlap, isValidBbox, type Bbox } from "@/components/pdf/bbox-utils";
 import { PdfPageViewer, type PdfPageViewerHandle } from "@/components/pdf/PdfPageViewer";
 
 type Props = {
@@ -18,28 +18,102 @@ function bboxKey(bbox: Record<string, number> | null | undefined): string {
   return `${bbox.x0},${bbox.y0},${bbox.x1},${bbox.y1}`;
 }
 
+function bboxDedupKey(bbox: Bbox): string {
+  const r = (n: number) => Math.round(n * 10000);
+  return `${r(bbox.x0)}_${r(bbox.y0)}_${r(bbox.x1)}_${r(bbox.y1)}`;
+}
+
+const NEIGHBOR_Y_GAP = 0.025;
+const MAX_EXPANSION_BBOXES = 3;
+const MAX_PAGE_COVERAGE = 0.6;
+
+/**
+ * Given seed bboxes for the active page, expand to vertically adjacent
+ * page_chunks within a tight y-gap so a citation lands on its full paragraph
+ * (1 chunk above + the seed + 1 below) rather than a single sentence box.
+ */
+function expandSeedBboxes(seeds: Bbox[], ref: ChatReference): Bbox[] {
+  const pageChunks: Bbox[] = (ref.page_chunks ?? [])
+    .map((c) => (c.bbox && isValidBbox(c.bbox) ? (c.bbox as Bbox) : null))
+    .filter((b): b is Bbox => b != null)
+    .sort((a, b) => a.y0 - b.y0);
+  if (pageChunks.length === 0) return seeds;
+
+  const seen = new Set<string>();
+  const out: Bbox[] = [];
+  const push = (b: Bbox): boolean => {
+    const key = bboxDedupKey(b);
+    if (seen.has(key)) return out.length < MAX_EXPANSION_BBOXES;
+    seen.add(key);
+    out.push(b);
+    return out.length < MAX_EXPANSION_BBOXES;
+  };
+
+  for (const seed of seeds) {
+    if (!push(seed)) break;
+    let idx = pageChunks.findIndex((b) => bboxDedupKey(b) === bboxDedupKey(seed));
+    if (idx < 0) {
+      idx = pageChunks.findIndex(
+        (b) => Math.abs(b.y0 - seed.y0) < 0.005 && Math.abs(b.x0 - seed.x0) < 0.05
+      );
+    }
+    if (idx < 0) continue;
+    let canGrow = out.length < MAX_EXPANSION_BBOXES;
+    for (let i = idx + 1; canGrow && i < pageChunks.length; i++) {
+      const prev = pageChunks[i - 1];
+      const cur = pageChunks[i];
+      if (cur.y0 - prev.y1 > NEIGHBOR_Y_GAP) break;
+      canGrow = push(cur);
+    }
+    for (let i = idx - 1; canGrow && i >= 0; i--) {
+      const next = pageChunks[i + 1];
+      const cur = pageChunks[i];
+      if (next.y0 - cur.y1 > NEIGHBOR_Y_GAP) break;
+      canGrow = push(cur);
+    }
+    if (!canGrow) break;
+  }
+  return out;
+}
+
 /** Overlays to draw on a single PDF page. Bboxes are normalized to that page only. */
 function overlaysForPage(
   page: number,
   highlights: ChatReference[],
   activeIndex?: number | null,
-  activeRef?: ChatReference | null
+  activeRef?: ChatReference | null,
+  documentId?: string | null
 ): ChatReference[] {
   if (activeRef?.page === page) {
-    const multi = (activeRef.highlight_bboxes ?? []).filter((bbox) =>
-      isValidBbox(bbox)
+    const multi = (activeRef.highlight_bboxes ?? []).filter(isValidBbox) as Bbox[];
+    const seeds: Bbox[] = multi.length
+      ? multi
+      : isValidBbox(activeRef.bbox)
+        ? [activeRef.bbox as Bbox]
+        : [];
+    if (!seeds.length) return [];
+
+    const expanded = expandSeedBboxes(seeds, activeRef);
+    const totalHeight = expanded.reduce((sum, b) => sum + (b.y1 - b.y0), 0);
+    const bounded = totalHeight > MAX_PAGE_COVERAGE ? expanded.slice(0, 1) : expanded;
+    const dedupe = dedupeByBboxOverlap as (
+      items: ChatReference[],
+      threshold?: number
+    ) => ChatReference[];
+    return dedupe(
+      bounded.map((bbox) => ({ ...activeRef, bbox })),
+      0.3
     );
-    if (multi.length) {
-      return multi.map((bbox) => ({ ...activeRef, bbox }));
-    }
-    if (isValidBbox(activeRef.bbox)) {
-      return [activeRef];
-    }
-    return [];
   }
+
+  // When a citation is actively focused, suppress passive overlays on other
+  // pages — they otherwise flash as gray boxes on pages 1-2 while the viewer
+  // is still scrolling to the active page, and create cross-document leaks.
+  if (activeRef) return [];
 
   const expanded: ChatReference[] = [];
   for (const h of highlights) {
+    if (documentId && h.document_id && h.document_id !== documentId) continue;
     if (h.page !== page) continue;
     const extra = h.highlight_bboxes;
     if (extra?.length) {
@@ -70,8 +144,11 @@ function overlaysForPage(
     return active ? [active] : [];
   }
 
-  const dedupe = dedupeByBboxOverlap as (items: ChatReference[]) => ChatReference[];
-  return dedupe(expanded);
+  const dedupe = dedupeByBboxOverlap as (
+    items: ChatReference[],
+    threshold?: number
+  ) => ChatReference[];
+  return dedupe(expanded, 0.3);
 }
 
 export function MultiHighlightPDFViewer({
@@ -137,12 +214,13 @@ export function MultiHighlightPDFViewer({
           pageNumber,
           highlights,
           activeIndex,
-          activeRef
+          activeRef,
+          documentId
         );
         return overlays.map((h) => (
           <BboxOverlay
             key={`${h.chunk_id}-${bboxKey(h.bbox)}-${pageNumber}`}
-            bbox={h.bbox!}
+            bbox={h.bbox as Bbox}
             width={pageWidth}
             height={pageHeight}
             active={

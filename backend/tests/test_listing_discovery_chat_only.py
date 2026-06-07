@@ -136,3 +136,52 @@ def test_map_reduce_triggers_without_tabular(db_session):
     assert should_use_listing_map_reduce(["d1", "d2", "d3", "d4"])
     assert not should_use_listing_map_reduce(["d1", "d2"])
     assert not should_use_listing_map_reduce(["d1"])
+
+
+def test_discovery_validates_fts_only_docs_without_target_party(db_session):
+    """FTS-only docs that don't mention the target party are dropped."""
+    now = utc_now_iso()
+    ws = Workspace(id=str(uuid.uuid4()), name="CCI", matter_ref=None, created_at=now, updated_at=now)
+    db_session.add(ws)
+    db_session.commit()
+
+    canonical = normalize_party("Google LLC")
+    google_doc = _seed_google_doc(
+        db_session,
+        ws.id,
+        "google-case.pdf",
+        "Informants filed against Google LLC under the Competition Act.",
+    )
+    generic_doc = _seed_google_doc(
+        db_session,
+        ws.id,
+        "chester-v-waverly.pdf",
+        (
+            "Chester v Municipality of Waverly. The court discussed case details "
+            "of negligence. The plaintiff sought damages."
+        ),
+    )
+
+    understanding = QueryUnderstanding(
+        intent="entity_matter_listing",
+        target_entity=TargetEntity(
+            canonical=canonical,
+            surfaces=["Google"],
+            resolved_canonicals=[canonical],
+        ),
+    )
+
+    doc_rows, diag = discover_listing_documents(
+        db_session,
+        understanding,
+        workspace_id=ws.id,
+        document_ids=None,
+        query="list all case details against google",
+        tabular_review_id=None,
+    )
+
+    found = {d for d, _ in doc_rows}
+    assert google_doc in found
+    assert generic_doc not in found
+    assert "fts_only_dropped" in diag
+    assert diag["fts_only_dropped"] >= 0

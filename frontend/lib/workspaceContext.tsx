@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -30,6 +31,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [workspaceId, setWorkspaceIdState] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const autoCreateAttemptedRef = useRef(false);
 
   const {
     data: workspaces = [],
@@ -50,6 +52,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hydrated || listPending) return;
+    if (workspaces.length === 0 && !autoCreateAttemptedRef.current) {
+      autoCreateAttemptedRef.current = true;
+      picardApi
+        .createWorkspace({ name: "My workspace" })
+        .then((ws) => {
+          qc.invalidateQueries({ queryKey: ["workspaces"] });
+          setWorkspaceIdState(ws.id);
+          localStorage.setItem(STORAGE_KEY, ws.id);
+        })
+        .catch(() => {
+          autoCreateAttemptedRef.current = false;
+        });
+      return;
+    }
     if (workspaceId && workspaces.some((w) => w.id === workspaceId)) return;
     if (workspaces.length > 0) {
       const next = workspaces[0].id;
@@ -59,7 +75,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setWorkspaceIdState(null);
       localStorage.removeItem(STORAGE_KEY);
     }
-  }, [hydrated, listPending, workspaceId, workspaces]);
+  }, [hydrated, listPending, workspaceId, workspaces, qc]);
 
   const setWorkspaceId = useCallback(
     (id: string | null) => {

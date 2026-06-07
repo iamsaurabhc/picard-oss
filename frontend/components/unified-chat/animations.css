@@ -1,0 +1,58 @@
+.message-enter {
+  animation: messageSlideUp 200ms ease-out;
+}
+
+@keyframes messageSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-shake {
+  animation: messageShake 300ms ease-in-out;
+}
+
+@keyframes messageShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+.panel-slide-in {
+  animation: panelSlideIn 250ms ease-in-out;
+}
+
+@keyframes panelSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.composer-card:focus-within {
+  box-shadow: var(--composer-shadow), 0 0 0 2px oklch(0.45 0.05 250 / 0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-enter,
+  .message-shake,
+  .panel-slide-in {
+    animation: none;
+  }
+}

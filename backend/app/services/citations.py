@@ -853,13 +853,29 @@ def _align_case_names_to_sources(
     return aligned, replacements
 
 
-def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int]:
+def _reassign_markers(
+    cleaned: str,
+    citation_map: CitationMap,
+    *,
+    intent: str | None = None,
+) -> tuple[str, int]:
     """Rewrite each cited sentence to the ref index that best supports its claim."""
-    from app.services.citation_binding import OVERLAP_THRESHOLD, best_ref_index_for_claim
+    from app.services.citation_binding import (
+        OVERLAP_THRESHOLD,
+        best_ref_index_for_claim,
+        best_ref_index_for_claim_scoped,
+    )
 
     refs = citation_map.refs
     if len(refs) < 2:
         return cleaned, 0
+
+    refs_by_index = {r.index: r for r in refs}
+    distinct_doc_ids = {r.document_id for r in refs if r.document_id}
+    scope_to_document = (
+        intent in {"entity_matter_listing", "case_overview"}
+        and len(distinct_doc_ids) > 1
+    )
 
     reassigned = 0
 
@@ -870,7 +886,16 @@ def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int
         claim = MARKER_RE.sub("", sentence).strip()
         if len(claim) < 12:
             return sentence
-        best_idx, best_score = best_ref_index_for_claim(claim, refs)
+        if scope_to_document:
+            marker_match = MARKER_RE.search(sentence)
+            existing_idx = int(marker_match.group(1)) if marker_match else None
+            existing_ref = refs_by_index.get(existing_idx) if existing_idx else None
+            restrict_doc = existing_ref.document_id if existing_ref else None
+            best_idx, best_score = best_ref_index_for_claim_scoped(
+                claim, refs, restrict_document_id=restrict_doc,
+            )
+        else:
+            best_idx, best_score = best_ref_index_for_claim(claim, refs)
         if best_idx is None or best_score < OVERLAP_THRESHOLD:
             return sentence
         new_sentence = MARKER_RE.sub(f"[{best_idx}]", sentence)
@@ -921,11 +946,11 @@ def validate_response(
     cleaned, _ = _align_case_names_to_sources(cleaned, citation_map, query=query)
     if preserve_structure:
         if intent in {"case_overview", "entity_matter_listing"}:
-            cleaned, reassigned = _reassign_markers(cleaned, citation_map)
+            cleaned, reassigned = _reassign_markers(cleaned, citation_map, intent=intent)
     else:
         cleaned, fact_stripped = _fact_verify_and_strip(cleaned, citation_map)
         stripped += fact_stripped
-        cleaned, reassigned = _reassign_markers(cleaned, citation_map)
+        cleaned, reassigned = _reassign_markers(cleaned, citation_map, intent=intent)
 
     if mode == "MULTI_CONSTRAINT" and not allow_partial_disclosure and len(citation_map.bundle_chunk_ids) > 1:
         cited_indices = {int(m.group(1)) for m in MARKER_RE.finditer(cleaned)}
