@@ -75,7 +75,7 @@ function phaseLabel(ev: Extract<ChatStreamEvent, { event: "progress" }>): string
     if (status === "start" && ev.document_name) {
       return `Ranking pages in ${ev.document_name}`;
     }
-    const pages = (ev as { pages_selected?: number[] }).pages_selected;
+    const pages = ev.pages_selected;
     if (status === "done" && pages != null) {
       const n = pages.length;
       return `Selected ${n} page${n === 1 ? "" : "s"}${ev.document_name ? ` in ${ev.document_name}` : ""}`;
@@ -85,9 +85,17 @@ function phaseLabel(ev: Extract<ChatStreamEvent, { event: "progress" }>): string
 
   if (phase === "coverage") {
     if (status === "start") return "Building context coverage";
-    const chunks = (ev as { chunk_count?: number }).chunk_count;
-    if (chunks != null) return `Context ready (${chunks} chunk${chunks === 1 ? "" : "s"})`;
+    if (ev.ranked_count != null) {
+      return `Coverage complete (${ev.ranked_count} page hit${ev.ranked_count === 1 ? "" : "s"})`;
+    }
     return "Coverage complete";
+  }
+
+  if (phase === "context") {
+    if (ev.chunk_count != null) {
+      return `Context ready (${ev.chunk_count} source${ev.chunk_count === 1 ? "" : "s"})`;
+    }
+    return "Context ready";
   }
 
   if (phase === "map") {
@@ -99,14 +107,14 @@ function phaseLabel(ev: Extract<ChatStreamEvent, { event: "progress" }>): string
       return "Mapping per-document briefs";
     }
     if (ev.document_name) {
-      const chunks = (ev as { chunk_count?: number }).chunk_count;
       const suffix =
-        chunks != null ? ` (${chunks} chunk${chunks === 1 ? "" : "s"})` : "";
+        ev.chunk_count != null
+          ? ` (${ev.chunk_count} chunk${ev.chunk_count === 1 ? "" : "s"})`
+          : "";
       return `Mapped ${ev.document_name}${suffix}`;
     }
-    if ((ev as { brief_count?: number }).brief_count != null) {
-      const n = (ev as { brief_count: number }).brief_count;
-      return `Map phase complete (${n} brief${n === 1 ? "" : "s"})`;
+    if (ev.brief_count != null) {
+      return `Map phase complete (${ev.brief_count} brief${ev.brief_count === 1 ? "" : "s"})`;
     }
     return "Map phase complete";
   }

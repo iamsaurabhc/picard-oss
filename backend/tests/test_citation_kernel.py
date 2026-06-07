@@ -12,7 +12,7 @@ from app.services.citation_kernel import (
     merge_evidence_maps,
     run_corpus_evidence_step,
 )
-from app.services.citations import build_citation_map
+from app.services.citations import CitationMap, CitationRef, build_citation_map
 
 
 def _hit(chunk_id: str, doc_id: str = "d1", page: int = 1) -> SearchHit:
@@ -117,3 +117,35 @@ def test_ck04_enforce_cite_from_maps_strips_unknown():
     cleaned = enforce_cite_from_maps("See [1] and [99].", [cmap])
     assert "[1]" in cleaned
     assert "[99]" not in cleaned
+
+
+def test_merge_evidence_maps_preserves_page_chunks_metadata():
+    page_chunks = [
+        {
+            "chunk_id": "c1",
+            "text": "Case No. 39 of 2018",
+            "bbox": {"x0": 0.1, "y0": 0.1, "x1": 0.9, "y1": 0.2},
+        }
+    ]
+    cmap = CitationMap(
+        refs=[
+            CitationRef(
+                index=1,
+                chunk_id="c1",
+                document_id="d1",
+                page=1,
+                bbox={"x0": 0.1, "y0": 0.1, "x1": 0.9, "y1": 0.2},
+                preview="Case No. 39 of 2018",
+                page_chunks=page_chunks,
+                highlight_bboxes=[{"x0": 0.1, "y0": 0.1, "x1": 0.9, "y1": 0.2}],
+                sentence_anchors=[{"sentence": "Case No. 39", "chunk_id": "c1"}],
+            )
+        ],
+        chunk_id_to_index={"c1": 1},
+        bundle_chunk_ids={},
+    )
+    merged, _ = merge_evidence_maps([(cmap, None)])
+    ref = merged.refs[0]
+    assert ref.page_chunks == page_chunks
+    assert ref.highlight_bboxes is not None
+    assert ref.sentence_anchors is not None

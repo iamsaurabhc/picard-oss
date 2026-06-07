@@ -39,6 +39,9 @@ class CitationRef:
     document_name: str | None = None
     heading_path: str | None = None
     pinpoint_quote: str | None = None
+    highlight_bboxes: list[dict] | None = None
+    sentence_anchors: list[dict] | None = None
+    page_chunks: list[dict] | None = None
 
 
 @dataclass
@@ -188,33 +191,170 @@ def build_citation_map(
             workspace_id=workspace_id,
         )
 
-    for hit in unique_hits:
-        bundle_id = None
-        if bundles:
-            for b in bundles:
-                if hit.chunk_id in b.chunk_ids:
-                    bundle_id = b.bundle_id
-                    break
-        preview = excerpts.get(hit.chunk_id) or _fallback_excerpt(hit.text_content or "", excerpt_chars)
-        if use_focus and preview:
-            parts = _SENTENCE_SPLIT_RE.split(preview.strip())
-            pinpoint = (parts[0] if parts else preview)[:200]
-        else:
-            pinpoint = preview[:200] if len(preview) > 200 else preview
+    def _bundle_for_chunk(chunk_id: str, default: str | None = None) -> str | None:
+        if not bundles:
+            return default
+        for bundle in bundles:
+            if chunk_id in bundle.chunk_ids:
+                return bundle.bundle_id
+        return default
+
+    def _append_ref(
+        *,
+        chunk_id: str,
+        document_id: str,
+        page: int,
+        bbox: dict | None,
+        preview: str,
+        heading_path: str | None,
+        bundle_id: str | None,
+        highlight_bboxes: list[dict] | None = None,
+        sentence_anchors: list[dict] | None = None,
+        page_chunks: list[dict] | None = None,
+    ) -> None:
+        pinpoint = preview[:200] if len(preview) > 200 else preview
         refs.append(
             CitationRef(
                 index=len(refs) + 1,
-                chunk_id=hit.chunk_id,
-                document_id=hit.document_id,
-                page=hit.page_number,
-                bbox=hit.bbox,
+                chunk_id=chunk_id,
+                document_id=document_id,
+                page=page,
+                bbox=bbox,
                 preview=preview,
                 bundle_id=bundle_id,
-                document_name=doc_names.get(hit.document_id),
-                heading_path=hit.heading_path,
+                document_name=doc_names.get(document_id),
+                heading_path=heading_path,
                 pinpoint_quote=pinpoint,
+                highlight_bboxes=highlight_bboxes,
+                sentence_anchors=sentence_anchors,
+                page_chunks=page_chunks,
             )
         )
+
+    if page_level and db is not None:
+        from app.schemas import SearchHit
+        from app.services.entity_page_context import (
+            _best_chunk_for_sentence,
+            anchor_chunk_for_excerpt,
+            chunks_for_page_citation_refs,
+            page_chunks_payload,
+            substantive_chunks_for_page,
+        )
+        from app.services.fts_search import parse_bbox
+
+        seen_ref_chunks: set[str] = set()
+        page_keys = sorted({(h.document_id, h.page_number) for h in unique_hits})
+        for document_id, page_number in page_keys:
+            page_hits = [
+                h
+                for h in unique_hits
+                if h.document_id == document_id and h.page_number == page_number
+            ]
+            context_chunk_ids = {h.chunk_id for h in page_hits}
+            merged_hit_text = max((h.text_content or "" for h in page_hits), key=len, default="")
+            primary_hit = max(page_hits, key=lambda h: len(h.text_content or ""))
+            facet_excerpt = (
+                excerpts.get(primary_hit.chunk_id)
+                or _fallback_excerpt(merged_hit_text, excerpt_chars)
+            )
+            chunks = chunks_for_page_citation_refs(
+                db,
+                document_id,
+                page_number,
+                context_chunk_ids,
+                facet_excerpt=facet_excerpt,
+            )
+            default_bundle = _bundle_for_chunk(page_hits[0].chunk_id)
+            page_chunk_meta = page_chunks_payload(db, document_id, page_number)
+            from app.services.excerpt_selector import split_sentences
+
+            page_substantive = substantive_chunks_for_page(db, document_id, page_number)
+            page_level_anchors: list[dict] = []
+            for sent in split_sentences(facet_excerpt) if facet_excerpt else []:
+                s = sent.strip()
+                if len(s) < 12:
+                    continue
+                matched, score = _best_chunk_for_sentence(s, page_substantive)
+                if matched is None or score <= 0:
+                    continue
+                page_level_anchors.append(
+                    {
+                        "sentence": s[:300],
+                        "chunk_id": matched.chunk_id,
+                        "bbox": parse_bbox(matched.bbox_json),
+                        "score": round(score, 3),
+                    }
+                )
+            for chunk in chunks:
+                if chunk.chunk_id in seen_ref_chunks:
+                    continue
+                seen_ref_chunks.add(chunk.chunk_id)
+                text = chunk.text_content or ""
+                if overview_focus:
+                    preview = (
+                        overview_facet_excerpt(
+                            text,
+                            excerpt_chars,
+                            question=question,
+                            sub_questions=sub_questions,
+                        )
+                        or _fallback_excerpt(text, excerpt_chars)
+                    )
+                else:
+                    preview = _fallback_excerpt(text, excerpt_chars)
+                chunk_hit = SearchHit(
+                    chunk_id=chunk.chunk_id,
+                    document_id=document_id,
+                    page_number=page_number,
+                    text_content=text,
+                    heading_path=chunk.heading_path,
+                    bbox=parse_bbox(chunk.bbox_json),
+                    score=0.0,
+                )
+                anchor_id, anchor_bbox, highlight_bboxes, sentence_anchors = anchor_chunk_for_excerpt(
+                    db, chunk_hit, preview,
+                )
+                merged_anchors = list(page_level_anchors)
+                seen_anchor = {a["sentence"].casefold() for a in merged_anchors}
+                for a in sentence_anchors or []:
+                    key = (a.get("sentence") or "").casefold()
+                    if key and key not in seen_anchor:
+                        merged_anchors.append(a)
+                        seen_anchor.add(key)
+                _append_ref(
+                    chunk_id=anchor_id,
+                    document_id=document_id,
+                    page=page_number,
+                    bbox=anchor_bbox,
+                    preview=preview,
+                    heading_path=chunk.heading_path,
+                    bundle_id=_bundle_for_chunk(chunk.chunk_id, default_bundle),
+                    highlight_bboxes=highlight_bboxes or None,
+                    sentence_anchors=merged_anchors or None,
+                    page_chunks=page_chunk_meta or None,
+                )
+    else:
+        for hit in unique_hits:
+            preview = excerpts.get(hit.chunk_id) or _fallback_excerpt(hit.text_content or "", excerpt_chars)
+            if use_focus and preview:
+                parts = _SENTENCE_SPLIT_RE.split(preview.strip())
+                pinpoint = (parts[0] if parts else preview)[:200]
+            else:
+                pinpoint = preview[:200] if len(preview) > 200 else preview
+            refs.append(
+                CitationRef(
+                    index=len(refs) + 1,
+                    chunk_id=hit.chunk_id,
+                    document_id=hit.document_id,
+                    page=hit.page_number,
+                    bbox=hit.bbox,
+                    preview=preview,
+                    bundle_id=_bundle_for_chunk(hit.chunk_id),
+                    document_name=doc_names.get(hit.document_id),
+                    heading_path=hit.heading_path,
+                    pinpoint_quote=pinpoint,
+                )
+            )
 
     chunk_id_to_index = {r.chunk_id: r.index for r in refs}
     return CitationMap(refs=refs, chunk_id_to_index=chunk_id_to_index, bundle_chunk_ids=bundle_chunk_ids)
@@ -265,13 +405,17 @@ def build_system_prompt(
     coverage_goal: str = "",
     synthesis_mode: str = "chat",
     agent_profile: str = "firm",
+    excerpt_cap: int | None = None,
 ) -> str:
-    if intent in {"case_overview", "entity_matter_listing"}:
-        excerpt_cap = 1200 if intent == "entity_matter_listing" else 800
+    if excerpt_cap is not None:
+        cap = excerpt_cap
+    elif intent in {"case_overview", "entity_matter_listing"}:
+        cap = 1200 if intent == "entity_matter_listing" else 1500
     elif intent == "factual_lookup":
-        excerpt_cap = 600
+        cap = 600
     else:
-        excerpt_cap = 400
+        cap = 400
+    excerpt_cap = cap
 
     entity_label = target_entity or "the named party"
     preamble = preamble_for_variant(settings.prompt_variant)
@@ -392,6 +536,7 @@ def build_system_prompt(
             "- Do NOT write 'various legal precedents' without naming them from a cited source.",
             "- If a section lacks evidence, write: 'Sources do not specify [topic].'",
             "- Do not invent citation numbers.",
+            "- For Damages / relief sought and Dates & procedural history, cite the source blocks under those headings.",
             "",
             "Sources:",
         ]
@@ -451,6 +596,25 @@ def build_system_prompt(
                 cited_ids.add(ref.chunk_id)
             else:
                 lines.append("(no dedicated excerpt in context for this sub-question)")
+        for ref in citation_map.refs:
+            if ref.chunk_id not in cited_ids:
+                lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
+    elif intent == "case_overview" and sub_questions and sub_question_coverage:
+        cited_ids: set[str] = set()
+        facet_order = [sq.label for sq in sub_questions]
+        for label in facet_order:
+            sq = next((s for s in sub_questions if s.label == label), None)
+            if not sq:
+                continue
+            cid = sub_question_coverage.get(label)
+            ref = chunk_to_ref.get(cid) if cid else None
+            facet_title = label.replace("_", " ").title()
+            lines.append(f"### Evidence for: {facet_title}")
+            if ref:
+                lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
+                cited_ids.add(ref.chunk_id)
+            else:
+                lines.append(f"(no dedicated excerpt in context for {facet_title.lower()})")
         for ref in citation_map.refs:
             if ref.chunk_id not in cited_ids:
                 lines.append(_format_source_block(ref, intent=intent, excerpt_cap=excerpt_cap))
@@ -516,7 +680,9 @@ def _fact_verify_and_strip(cleaned: str, citation_map: CitationMap) -> tuple[str
 
 
 def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int]:
-    """Reassign [N] when claim text overlaps another source more strongly."""
+    """Rewrite each cited sentence to the ref index that best supports its claim."""
+    from app.services.citation_binding import OVERLAP_THRESHOLD, best_ref_index_for_claim
+
     refs = citation_map.refs
     if len(refs) < 2:
         return cleaned, 0
@@ -525,25 +691,28 @@ def _reassign_markers(cleaned: str, citation_map: CitationMap) -> tuple[str, int
 
     def _replace_sentence(sentence: str) -> str:
         nonlocal reassigned
-        markers = list(MARKER_RE.finditer(sentence))
-        if len(markers) != 1:
+        if not MARKER_RE.search(sentence):
             return sentence
-        idx = int(markers[0].group(1))
         claim = MARKER_RE.sub("", sentence).strip()
-        if len(claim) < 20:
+        if len(claim) < 12:
             return sentence
-        scores = [(r.index, _overlap_score(claim, r.preview)) for r in refs]
-        score_by_idx = dict(scores)
-        best_idx, best_score = max(scores, key=lambda x: x[1])
-        current = score_by_idx.get(idx, 0.0)
-        if best_idx != idx and best_score > current + 0.15:
+        best_idx, best_score = best_ref_index_for_claim(claim, refs)
+        if best_idx is None or best_score < OVERLAP_THRESHOLD:
+            return sentence
+        new_sentence = MARKER_RE.sub(f"[{best_idx}]", sentence)
+        if new_sentence != sentence:
             reassigned += 1
-            return sentence[: markers[0].start()] + f"[{best_idx}]" + sentence[markers[0].end() :]
-        return sentence
+        return new_sentence
 
     parts = []
     for para in cleaned.split("\n\n"):
-        sents = _SENTENCE_SPLIT_RE.split(para.strip()) if para.strip() else [para]
+        if not para.strip():
+            continue
+        lines = para.split("\n")
+        if any(MARKER_RE.search(line) for line in lines):
+            parts.append("\n".join(_replace_sentence(line) if MARKER_RE.search(line) else line for line in lines))
+            continue
+        sents = _SENTENCE_SPLIT_RE.split(para.strip())
         parts.append(" ".join(_replace_sentence(s) for s in sents if s))
     return "\n\n".join(parts), reassigned
 
@@ -575,7 +744,8 @@ def validate_response(
 
     cleaned = MARKER_RE.sub(_replace_invalid, answer)
     if preserve_structure:
-        pass
+        if intent in {"case_overview", "entity_matter_listing"}:
+            cleaned, reassigned = _reassign_markers(cleaned, citation_map)
     else:
         cleaned, fact_stripped = _fact_verify_and_strip(cleaned, citation_map)
         stripped += fact_stripped
@@ -604,7 +774,65 @@ def validate_response(
     return cleaned, validation
 
 
-def references_for_api(citation_map: CitationMap) -> list[dict]:
+def cited_indices_in_answer(answer: str) -> list[int]:
+    """Citation marker indices in first-appearance order."""
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for match in MARKER_RE.finditer(answer):
+        idx = int(match.group(1))
+        if idx not in seen:
+            seen.add(idx)
+            ordered.append(idx)
+    return ordered
+
+
+def _document_binding_chunks(citation_map: CitationMap) -> dict[str, list[dict]]:
+    """All chunk surfaces in the map, grouped by document (for cross-page cite binding)."""
+    by_doc: dict[str, dict[str, dict]] = {}
+    for ref in citation_map.refs:
+        bucket = by_doc.setdefault(ref.document_id, {})
+        for anchor in ref.sentence_anchors or []:
+            if not isinstance(anchor, dict):
+                continue
+            cid = anchor.get("chunk_id") or ref.chunk_id
+            bucket[cid] = {
+                "chunk_id": cid,
+                "text": (anchor.get("sentence") or "")[:800],
+                "bbox": anchor.get("bbox"),
+                "page": ref.page,
+            }
+        for pc in ref.page_chunks or []:
+            if not isinstance(pc, dict):
+                continue
+            cid = pc.get("chunk_id") or ref.chunk_id
+            bucket[cid] = {
+                "chunk_id": cid,
+                "text": (pc.get("text") or "")[:800],
+                "bbox": pc.get("bbox"),
+                "page": pc.get("page") or ref.page,
+            }
+        if ref.preview:
+            bucket[ref.chunk_id] = {
+                "chunk_id": ref.chunk_id,
+                "text": ref.preview[:800],
+                "bbox": ref.bbox,
+                "page": ref.page,
+            }
+    return {doc_id: list(chunks.values()) for doc_id, chunks in by_doc.items()}
+
+
+def references_for_api(
+    citation_map: CitationMap,
+    *,
+    answer: str | None = None,
+    cited_only: bool = False,
+) -> list[dict]:
+    refs = citation_map.refs
+    if cited_only and answer:
+        cited_order = cited_indices_in_answer(answer)
+        by_index = {r.index: r for r in refs}
+        refs = [by_index[i] for i in cited_order if i in by_index]
+    doc_binding = _document_binding_chunks(citation_map)
     return [
         {
             "index": r.index,
@@ -613,10 +841,18 @@ def references_for_api(citation_map: CitationMap) -> list[dict]:
             "document_name": r.document_name,
             "page": r.page,
             "bbox": r.bbox,
+            "highlight_bboxes": r.highlight_bboxes,
+            "sentence_anchors": r.sentence_anchors,
+            "page_chunks": r.page_chunks,
+            "document_binding_chunks": [
+                c
+                for c in doc_binding.get(r.document_id, [])
+                if c.get("page") == r.page
+            ],
             "preview": r.preview,
             "pinpoint_quote": r.pinpoint_quote,
             "heading_path": r.heading_path,
             "bundle_id": r.bundle_id,
         }
-        for r in citation_map.refs
+        for r in refs
     ]

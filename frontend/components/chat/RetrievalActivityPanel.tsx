@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ActivityStep } from "./useRetrievalActivity";
 import type { RetrievalSummary } from "./useRetrievalActivity";
+import { formatDuration } from "@/hooks/useRequestTimer";
 import { RetrievalPhaseRow } from "./RetrievalPhaseRow";
 import { RetrievalSnippetRow } from "./RetrievalSnippetRow";
 
@@ -13,6 +14,7 @@ type Props = {
   isStreaming: boolean;
   shouldMinimize: boolean;
   retrievalSummary?: RetrievalSummary | null;
+  elapsedMs?: number;
   compact?: boolean;
 };
 
@@ -22,6 +24,7 @@ export function RetrievalActivityPanel({
   isStreaming,
   shouldMinimize,
   retrievalSummary,
+  elapsedMs = 0,
   compact = false,
 }: Props) {
   const [userToggled, setUserToggled] = useState(false);
@@ -45,6 +48,7 @@ export function RetrievalActivityPanel({
     label = `Retrieved ${parts.join(" · ")}`;
   }
 
+  const durationLabel = elapsedMs > 0 ? formatDuration(elapsedMs) : null;
   const buttonTextClass = compact ? "text-xs" : "text-sm";
   const childrenGapClass = compact ? "gap-2.5" : "gap-3";
 
@@ -68,10 +72,15 @@ export function RetrievalActivityPanel({
             </span>
           )}
         </span>
-        <ChevronDown
-          size={12}
-          className={`ml-2 shrink-0 transition-transform duration-200 ${isOpen ? "" : "-rotate-90"}`}
-        />
+        <span className="ml-2 flex shrink-0 items-center gap-2">
+          {durationLabel ? (
+            <span className="font-sans text-xs tabular-nums text-neutral-400">{durationLabel}</span>
+          ) : null}
+          <ChevronDown
+            size={12}
+            className={`transition-transform duration-200 ${isOpen ? "" : "-rotate-90"}`}
+          />
+        </span>
       </button>
       {isOpen && (
         <div className={`mt-3 flex flex-col ${childrenGapClass}`}>

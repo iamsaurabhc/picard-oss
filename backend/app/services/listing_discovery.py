@@ -288,6 +288,10 @@ def discover_listing_documents(
 
     doc_rows = sorted(merged_scores.items(), key=lambda x: -x[1])
     total_union = len(doc_rows)
+    from app.services.query_understanding import _is_singular_case_details_query
+
+    if _is_singular_case_details_query(query):
+        doc_rows = doc_rows[:1]
 
     sources = {
         "entity": len(entity_ids),

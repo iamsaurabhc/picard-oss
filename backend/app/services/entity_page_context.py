@@ -310,6 +310,7 @@ def rank_pages_for_listing(
 
 
 _OCR_NOISE_TOKEN_RE = re.compile(r"\b[A-Z0-9]{3,}[-/]?[A-Z0-9]{2,}\b")
+_WORD_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 class _ChunkLike(Protocol):
@@ -343,12 +344,231 @@ def best_representative_chunk(chunks: list[_ChunkLike]) -> _ChunkLike | None:
     return max(chunks, key=lambda c: chunk_text_quality_score(c.text_content or ""))
 
 
+def token_overlap_score(needle: str, haystack: str) -> float:
+    a = {t.casefold() for t in _WORD_TOKEN_RE.findall(needle or "") if len(t) > 2}
+    if not a:
+        return 0.0
+    b = {t.casefold() for t in _WORD_TOKEN_RE.findall(haystack or "") if len(t) > 2}
+    return len(a & b) / len(a)
+
+
+def _best_chunk_for_sentence(sentence: str, page_chunks: list) -> tuple[object | None, float]:
+    needle = (sentence or "").casefold().strip()
+    if len(needle) < 8:
+        return None, 0.0
+    for length in (120, 80, 50, 30):
+        fragment = needle[:length]
+        if len(fragment) < 8:
+            continue
+        for chunk in page_chunks:
+            text = (chunk.text_content or "").casefold()
+            if fragment in text:
+                return chunk, 1.0
+    # Also try fragments from the middle/end of the sentence to avoid
+    # false positives when sentences start with common legal boilerplate
+    if len(needle) > 60:
+        mid = len(needle) // 2
+        for frag_start in (mid - 25, max(0, len(needle) - 50)):
+            fragment = needle[frag_start:frag_start + 50]
+            if len(fragment) < 20:
+                continue
+            for chunk in page_chunks:
+                text = (chunk.text_content or "").casefold()
+                if fragment in text:
+                    return chunk, 0.95
+    best_chunk = None
+    best_score = 0.0
+    for chunk in page_chunks:
+        score = token_overlap_score(sentence, chunk.text_content or "")
+        if score > best_score:
+            best_score = score
+            best_chunk = chunk
+    if best_chunk is not None and best_score >= 0.35:
+        return best_chunk, best_score
+    return None, 0.0
+
+
+def _chunk_read_order_key(chunk) -> tuple[float, str]:
+    bbox = parse_bbox(chunk.bbox_json)
+    if bbox and bbox.get("y0") is not None:
+        return (float(bbox["y0"]), chunk.chunk_id)
+    return (0.0, chunk.chunk_id)
+
+
+def substantive_chunks_for_page(db: Session, document_id: str, page_number: int) -> list:
+    """Load page chunks in reading order, keeping substantive text blocks only."""
+    from app.services.entity_page_chunks import is_substantive_chunk_text
+
+    page_chunks = _load_page_chunks_cached(db, document_id, page_number)
+    substantive = [c for c in page_chunks if is_substantive_chunk_text(c.text_content or "")]
+    return sorted(substantive, key=_chunk_read_order_key)
+
+
+def chunk_for_id_on_page(
+    db: Session,
+    document_id: str,
+    page_number: int,
+    chunk_id: str,
+):
+    """Return the page chunk record for chunk_id, if present."""
+    for chunk in _load_page_chunks_cached(db, document_id, page_number):
+        if chunk.chunk_id == chunk_id:
+            return chunk
+    return None
+
+
+def context_chunks_for_page(
+    db: Session,
+    document_id: str,
+    page_number: int,
+    context_chunk_ids: set[str],
+    *,
+    hit_text: str = "",
+) -> list:
+    """Substantive chunks limited to retrieval context, with text-overlap fallback."""
+    from app.services.citation_binding import score_claim_to_chunk
+
+    substantive = substantive_chunks_for_page(db, document_id, page_number)
+    in_context = [c for c in substantive if c.chunk_id in context_chunk_ids]
+    if in_context:
+        return in_context
+    if not substantive:
+        return []
+    if hit_text.strip():
+        scored = sorted(
+            substantive,
+            key=lambda c: score_claim_to_chunk(hit_text[:400], c.text_content or ""),
+            reverse=True,
+        )
+        return [scored[0]]
+    return [substantive[0]]
+
+
+def chunks_for_page_citation_refs(
+    db: Session,
+    document_id: str,
+    page_number: int,
+    context_chunk_ids: set[str],
+    *,
+    facet_excerpt: str = "",
+) -> list:
+    """Chunks for cite refs: retrieval hits plus chunks bound to facet excerpt sentences."""
+    from app.services.citation_binding import ChunkCandidate, best_chunk_for_claim, score_claim_to_chunk
+    from app.services.excerpt_selector import split_sentences
+
+    substantive = substantive_chunks_for_page(db, document_id, page_number)
+    if not substantive:
+        return []
+    selected_ids = set(context_chunk_ids)
+    # Only fall back to top chunk if no retrieval hits exist on this page
+    if substantive and not (selected_ids & {c.chunk_id for c in substantive}):
+        top_chunk = min(substantive, key=_chunk_read_order_key)
+        selected_ids.add(top_chunk.chunk_id)
+    candidates = [
+        ChunkCandidate(chunk_id=c.chunk_id, text=c.text_content or "")
+        for c in substantive
+    ]
+    for sentence in split_sentences(facet_excerpt) if facet_excerpt else []:
+        sent = sentence.strip()
+        if len(sent) < 12:
+            continue
+        best, score = best_chunk_for_claim(sent, candidates, min_score=0.25)
+        if best:
+            selected_ids.add(best.chunk_id)
+    ordered = [c for c in substantive if c.chunk_id in selected_ids]
+    if ordered:
+        return ordered
+    if facet_excerpt.strip():
+        scored = sorted(
+            substantive,
+            key=lambda c: score_claim_to_chunk(facet_excerpt[:400], c.text_content or ""),
+            reverse=True,
+        )
+        return [scored[0]]
+    return [substantive[0]]
+
+
+def page_chunks_payload(db: Session, document_id: str, page_number: int) -> list[dict]:
+    """All substantive chunks on a page for client-side claim anchoring."""
+    return [
+        {
+            "chunk_id": c.chunk_id,
+            "text": (c.text_content or "")[:800],
+            "bbox": parse_bbox(c.bbox_json),
+            "page": page_number,
+        }
+        for c in substantive_chunks_for_page(db, document_id, page_number)
+    ]
+
+
 def _merge_page_text(chunks: list, *, max_chars: int) -> str:
     parts = [(c.text_content or "").strip() for c in chunks if (c.text_content or "").strip()]
     merged = "\n\n".join(parts)
     if len(merged) <= max_chars:
         return merged
     return merged[:max_chars].rstrip() + "…"
+
+
+def anchor_chunk_for_excerpt(
+    db: Session,
+    hit: SearchHit,
+    excerpt: str,
+) -> tuple[str, dict | None, list[dict], list[dict]]:
+    """Pick chunk(s) whose text best contains excerpt sentences (fixes bbox/highlight alignment)."""
+    from app.services.excerpt_selector import split_sentences
+
+    page_chunks = _load_page_chunks_cached(db, hit.document_id, hit.page_number)
+    if not page_chunks:
+        return hit.chunk_id, hit.bbox, [], []
+
+    sentences = split_sentences(excerpt) or ([excerpt.strip()] if excerpt and excerpt.strip() else [])
+    sentence_anchors: list[dict] = []
+    seen_chunk_ids: set[str] = set()
+    highlight_bboxes: list[dict] = []
+    best_primary: tuple[str, dict | None, float] | None = None
+
+    for sentence in sentences:
+        chunk, score = _best_chunk_for_sentence(sentence, page_chunks)
+        if chunk is None or score <= 0:
+            continue
+        bbox = parse_bbox(chunk.bbox_json)
+        sentence_anchors.append(
+            {
+                "sentence": sentence[:300],
+                "chunk_id": chunk.chunk_id,
+                "bbox": bbox,
+                "score": round(score, 3),
+            }
+        )
+        if chunk.chunk_id not in seen_chunk_ids and bbox:
+            seen_chunk_ids.add(chunk.chunk_id)
+            highlight_bboxes.append(bbox)
+        if best_primary is None or score > best_primary[2]:
+            best_primary = (chunk.chunk_id, bbox, score)
+
+    if best_primary is not None:
+        # Cap highlights to the 3 best-scoring anchors to avoid whole-page highlighting
+        if len(highlight_bboxes) > 3:
+            scored_anchors = sorted(
+                [a for a in sentence_anchors if a.get("bbox")],
+                key=lambda a: a.get("score", 0),
+                reverse=True,
+            )
+            keep_ids: set[str] = set()
+            kept_bboxes: list[dict] = []
+            for a in scored_anchors:
+                cid = a["chunk_id"]
+                if cid not in keep_ids:
+                    keep_ids.add(cid)
+                    kept_bboxes.append(a["bbox"])
+                if len(kept_bboxes) >= 3:
+                    break
+            highlight_bboxes = kept_bboxes
+        return best_primary[0], best_primary[1], highlight_bboxes, sentence_anchors
+
+    primary = best_representative_chunk(page_chunks) or page_chunks[0]
+    bbox = parse_bbox(primary.bbox_json)
+    return primary.chunk_id, bbox, [bbox] if bbox else [], []
 
 
 def hits_from_ranked_pages(
@@ -557,7 +777,7 @@ def retrieve_overview_page_hits(
             if h.page_number not in seen:
                 hits.append(h)
                 seen.add(h.page_number)
-    return hits, {
+    diag = {
         "candidate_pages": len(pages),
         "pages_selected": [s.page_number for s in ranked],
         "page_level": True,
@@ -566,6 +786,7 @@ def retrieve_overview_page_hits(
         "vector_pages": sorted(vector_scores.keys()),
         "hybrid_fused_pages": len(fused_page_scores),
     }
+    return hits, diag
 
 
 def cross_page_reference_hits(

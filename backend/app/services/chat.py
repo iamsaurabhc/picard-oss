@@ -34,6 +34,7 @@ from app.services.overview_retrieval import overview_retrieve_with_progress
 from app.services.planned_retrieval import PlannedRetrievalConfig, planned_retrieve_with_progress
 from app.services.retrieval_context import clear_retrieval_context, reset_retrieval_context
 from app.services.query_understanding import understand_query, understanding_summary, _case_name_terms
+from app.services.retrieval_depth import depth_policy_to_diagnostics, resolve_retrieval_depth
 from app.services.retrieval_progress import RetrievalProgressEmitter
 from app.services.search import execute_search
 
@@ -232,6 +233,39 @@ def _persist_message(
     return msg
 
 
+def _prompt_evidence_diagnostics(
+    system_prompt: str,
+    *,
+    coverage_report: dict | None = None,
+) -> dict:
+    """Observability: verify prompt Sources contain amount/date anchors."""
+    from app.services.excerpt_selector import has_explicit_monetary_amount
+
+    prompt = system_prompt or ""
+    prompt_cf = prompt.casefold()
+    months = (
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    )
+
+    def _facet_block(facet: str) -> str:
+        marker = f"### evidence for: {facet}"
+        if marker not in prompt_cf:
+            return ""
+        idx = prompt_cf.find(marker)
+        rest = prompt[idx:]
+        next_idx = rest.find("### evidence for:", len(marker))
+        return rest[:next_idx] if next_idx > 0 else rest[:2500]
+
+    damages = _facet_block("damages")
+    dates = _facet_block("dates")
+    return {
+        "damages_excerpt_contains_amount": has_explicit_monetary_amount(damages or prompt),
+        "dates_excerpt_contains_month": any(m in (dates or prompt_cf) for m in months),
+        "facet_coverage": (coverage_report or {}).get("facet_coverage") or {},
+    }
+
+
 def _use_carp(body: ChatStreamRequest, understanding) -> bool:
     return (
         body.retrieval_mode == "multi_constraint"
@@ -379,6 +413,13 @@ async def _stream_chat_body(
         )
         is_listing, is_overview = routing_flags_from_policy(agent_policy, understanding)
 
+    depth_policy = resolve_retrieval_depth(
+        body.message,
+        understanding,
+        is_overview=is_overview,
+        is_listing=is_listing,
+    )
+
     yield emitter.progress(
         "understanding",
         "done",
@@ -389,7 +430,10 @@ async def _stream_chat_body(
         breadth=agent_policy.breadth if agent_policy else None,
     )
 
-    retrieval_diagnostics: dict = {"understanding": understanding_summary(understanding)}
+    retrieval_diagnostics: dict = {
+        "understanding": understanding_summary(understanding),
+        **depth_policy_to_diagnostics(depth_policy),
+    }
     if agent_policy:
         retrieval_diagnostics["agent_policy"] = {
             "breadth": agent_policy.breadth,
@@ -412,6 +456,7 @@ async def _stream_chat_body(
         and body.retrieval_mode in ("simple", "auto")
         and not is_listing
         and not is_overview
+        and depth_policy.depth_tier not in ("deep", "exhaustive")
         and not _use_carp(body, understanding)
     )
     fast_citation_map = None
@@ -569,7 +614,7 @@ async def _stream_chat_body(
                 hits, overview_diag = exc.value
                 break
         retrieval_diagnostics.update(overview_diag)
-        top_k = settings.chat_overview_top_k
+        top_k = depth_policy.top_k
         rank_mode = "coverage"
         refused = len(hits) == 0
     elif not use_fast_tier:
@@ -663,18 +708,19 @@ async def _stream_chat_body(
                 top_k=top_k,
                 rank_mode=rank_mode,  # type: ignore[arg-type]
                 page_level_pool=overview_page_context,
+                depth_policy=depth_policy,
             )
         retrieval_diagnostics.update(rank_cover_diag)
         yield emitter.progress(
             "coverage",
             "done",
-            chunk_count=len(hits),
+            ranked_count=len(hits),
             gaps_filled=rank_cover_diag.get("coverage_report", {}).get("gaps_filled", []),
         )
         yield emitter.progress("rank", "done", ranked_count=len(hits))
     elif use_fast_tier and fast_citation_map:
         yield emitter.progress("rank", "done", ranked_count=len(hits), strategy="fast_tier")
-        yield emitter.progress("coverage", "done", chunk_count=len(hits), skipped=True)
+        yield emitter.progress("coverage", "done", ranked_count=len(hits), skipped=True)
     elif listing_map_result:
         cmap = listing_map_result["citation_map"]
         retrieval_diagnostics["pages_in_context"] = sorted({r.page for r in cmap.refs})
@@ -683,28 +729,26 @@ async def _stream_chat_body(
         )
         retrieval_diagnostics["documents_missing_from_context"] = []
         yield emitter.progress("rank", "done", ranked_count=len(cmap.refs), strategy="listing_map_reduce")
-        yield emitter.progress("coverage", "done", chunk_count=len(cmap.refs), skipped=True)
+        yield emitter.progress("coverage", "done", ranked_count=len(cmap.refs), skipped=True)
     elif carp_refused_empty:
         yield emitter.progress("rank", "done", ranked_count=0, skipped=True, strategy="carp_refused")
-        yield emitter.progress("coverage", "done", chunk_count=0, skipped=True)
+        yield emitter.progress("coverage", "done", ranked_count=0, skipped=True)
 
-    chunk_count = (
-        len(listing_map_result["citation_map"].refs)
-        if listing_map_result
-        else len(hits)
+    retrieval_diagnostics["page_hits_in_context"] = len(hits)
+    retrieval_diagnostics["pages_in_context"] = sorted(
+        {(h.document_id, h.page_number) for h in hits}
     )
-    retrieval_diagnostics["latency_ms"] = latency.to_dict()
-    retrieval_event = {
-        "event": "retrieval",
-        "chunk_count": chunk_count,
-        "bundle_count": len(bundles or []),
-        "refused": refused and chunk_count == 0,
-        "mode": search_mode,
-        "diagnostics": retrieval_diagnostics,
-    }
-    yield retrieval_event
 
     if (refuse_gate(hits) or carp_refused_empty) and not listing_map_result:
+        retrieval_diagnostics["latency_ms"] = latency.to_dict()
+        yield {
+            "event": "retrieval",
+            "chunk_count": 0,
+            "bundle_count": len(bundles or []),
+            "refused": True,
+            "mode": search_mode,
+            "diagnostics": retrieval_diagnostics,
+        }
         refs: list[dict] = []
         _persist_message(
             db,
@@ -760,7 +804,13 @@ async def _stream_chat_body(
                 coverage_report=coverage_report,
                 synthesis_mode=agent_policy.synthesis_mode if agent_policy else "chat",
                 agent_profile=agent_policy.agent_profile if agent_policy else "firm",
+                prompt_excerpt_cap=depth_policy.prompt_excerpt_cap,
             )
+        retrieval_diagnostics["prompt_evidence"] = _prompt_evidence_diagnostics(
+            system_prompt,
+            coverage_report=coverage_report,
+        )
+        retrieval_diagnostics["coverage_report_in_prompt"] = bool(coverage_report)
         if body.tabular_review_id:
             from app.services.tabular import build_tabular_chat_context
 
@@ -774,6 +824,23 @@ async def _stream_chat_body(
         system_prompt,
         tabular_overlay=tabular_overlay,
         workflow_prefix=workflow_prompt,
+    )
+
+    retrieval_diagnostics["citation_ref_count"] = len(citation_map.refs)
+    retrieval_diagnostics["latency_ms"] = latency.to_dict()
+    yield {
+        "event": "retrieval",
+        "chunk_count": len(citation_map.refs),
+        "bundle_count": len(bundles or []),
+        "refused": refused and len(citation_map.refs) == 0,
+        "mode": search_mode,
+        "diagnostics": retrieval_diagnostics,
+    }
+    yield emitter.progress(
+        "context",
+        "done",
+        chunk_count=len(citation_map.refs),
+        page_hits=len(hits),
     )
 
     yield emitter.progress("generate", "start")

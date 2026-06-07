@@ -321,6 +321,11 @@ def overview_facet_excerpt(
         anchored = _amount_anchored_excerpt(text, max(200, max_chars // 3))
         if anchored:
             excerpt = f"{anchored} {excerpt}".strip()
+    dates_requested = any(sq.label == "dates" for sq in (sub_questions or []))
+    if dates_requested and _DATE_ANCHOR_RE.search(text or "") and not _DATE_ANCHOR_RE.search(excerpt):
+        date_anchor = date_anchored_excerpt(text, max(200, max_chars // 3))
+        if date_anchor:
+            excerpt = f"{date_anchor} {excerpt}".strip()
     if len(excerpt) > max_chars:
         excerpt = _trim_excerpt_end(excerpt, max_chars)
     return excerpt
@@ -371,6 +376,31 @@ def _amount_anchored_excerpt(text: str, max_chars: int) -> str | None:
     if not cleaned:
         return None
     match = _EXPLICIT_MONETARY_RE.search(cleaned) or _AMOUNT_HINT_RE.search(cleaned)
+    if not match:
+        return None
+    start = max(0, match.start() - 80)
+    end = min(len(cleaned), start + max_chars)
+    if end - start < max_chars:
+        start = max(0, end - max_chars)
+    excerpt = cleaned[start:end].strip()
+    if end < len(cleaned):
+        excerpt = _trim_excerpt_end(excerpt, max_chars)
+    return excerpt
+
+
+_DATE_ANCHOR_RE = re.compile(
+    r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December"
+    r"\s+\d{1,2},?\s+\d{4}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b",
+    re.IGNORECASE,
+)
+
+
+def date_anchored_excerpt(text: str, max_chars: int) -> str | None:
+    """Center excerpt on a calendar date span when present."""
+    cleaned = (text or "").strip().replace("\n", " ")
+    if not cleaned:
+        return None
+    match = _DATE_ANCHOR_RE.search(cleaned)
     if not match:
         return None
     start = max(0, match.start() - 80)

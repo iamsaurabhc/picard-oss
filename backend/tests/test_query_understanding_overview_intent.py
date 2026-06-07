@@ -22,3 +22,10 @@ def test_pinpoint_damages_not_overview():
     settings.enable_regex_nlp = True
     u = understand_query("What damages did the plaintiff claim?")
     assert u.intent == "factual_lookup"
+
+
+def test_singular_case_details_involving_party_routes_to_overview():
+    settings.enable_llm_query_understanding = False
+    settings.enable_regex_nlp = True
+    u = understand_query("Give case details involving Aaqib Javeed")
+    assert u.intent == "case_overview"

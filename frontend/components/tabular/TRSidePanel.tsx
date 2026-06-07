@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2, RefreshCw, X } from "lucide-react";
 import type { ChatReference, DocumentRecord, TabularCell, TabularColumn } from "@/lib/picardApi";
 import { picardApi } from "@/lib/picardApi";
-import { MultiHighlightPDFViewer } from "@/components/MultiHighlightPDFViewer";
+import { MultiHighlightPDFViewer } from "@/components/pdf/PdfViewerDynamic";
+import { ResizableSplitPane } from "@/components/ResizableSplitPane";
 import { preprocessCitations } from "./citation-utils";
 
 type Props = {
@@ -102,7 +103,12 @@ export function TRSidePanel({
   return (
     <div className="flex h-full w-[min(520px,45vw)] shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
-        <button type="button" onClick={onClose} className="rounded p-1 hover:bg-neutral-100">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close panel"
+          className="rounded p-1 hover:bg-neutral-100"
+        >
           <X className="h-4 w-4" />
         </button>
         <div className="min-w-0 flex-1">
@@ -115,6 +121,7 @@ export function TRSidePanel({
             className="rounded p-1 hover:bg-neutral-100"
             onClick={() => onNavigate(prevCol.key)}
             title={prevCol.label}
+            aria-label={`Previous column: ${prevCol.label}`}
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -125,6 +132,7 @@ export function TRSidePanel({
             className="rounded p-1 hover:bg-neutral-100"
             onClick={() => onNavigate(nextCol.key)}
             title={nextCol.label}
+            aria-label={`Next column: ${nextCol.label}`}
           >
             <ChevronRight className="h-4 w-4" />
           </button>
@@ -152,41 +160,54 @@ export function TRSidePanel({
         ) : null}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 text-sm">
-        <h3 className="mb-1 text-xs font-medium uppercase text-neutral-500">Summary</h3>
-        <p className="mb-4 whitespace-pre-wrap leading-relaxed">{summary.replace(/\[\[[^\]]+\]\]/g, "")}</p>
-        {cell.reasoning ? (
-          <>
-            <h3 className="mb-1 text-xs font-medium uppercase text-neutral-500">Reasoning</h3>
-            <p className="mb-4 text-neutral-600">{cell.reasoning}</p>
-          </>
-        ) : null}
-        {citations.length > 0 ? (
-          <div className="mb-4 flex flex-wrap gap-2">
-            {citations.map((c, i) => (
-              <button
-                key={i}
-                type="button"
-                className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
-                onClick={() => {
-                  const ref = highlights.find((h) => h.page === c.page);
-                  if (ref) setActiveRef(ref);
-                }}
-              >
-                p.{c.page}
-              </button>
-            ))}
+      <ResizableSplitPane
+        direction="vertical"
+        initialRatio={0.55}
+        minPrimary={120}
+        minSecondary={200}
+        storageKey="picard:tabularPdfSplit"
+        className="min-h-0 flex-1"
+        primary={
+          <div className="h-full overflow-y-auto p-4 text-sm">
+            <h3 className="mb-1 text-xs font-medium uppercase text-neutral-500">Summary</h3>
+            <p className="mb-4 whitespace-pre-wrap leading-relaxed">
+              {summary.replace(/\[\[[^\]]+\]\]/g, "")}
+            </p>
+            {cell.reasoning ? (
+              <>
+                <h3 className="mb-1 text-xs font-medium uppercase text-neutral-500">Reasoning</h3>
+                <p className="mb-4 text-neutral-600">{cell.reasoning}</p>
+              </>
+            ) : null}
+            {citations.length > 0 ? (
+              <div className="mb-4 flex flex-wrap gap-2">
+                {citations.map((c, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
+                    onClick={() => {
+                      const ref = highlights.find((h) => h.page === c.page);
+                      if (ref) setActiveRef(ref);
+                    }}
+                  >
+                    p.{c.page}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
-        ) : null}
-      </div>
-
-      <div className="h-[45vh] min-h-[280px] border-t border-neutral-200">
-        <MultiHighlightPDFViewer
-          documentId={document.id}
-          highlights={highlights}
-          activeRef={activeRef}
-        />
-      </div>
+        }
+        secondary={
+          <div className="h-full min-h-0">
+            <MultiHighlightPDFViewer
+              documentId={document.id}
+              highlights={highlights}
+              activeRef={activeRef}
+            />
+          </div>
+        }
+      />
     </div>
   );
 }

@@ -17,7 +17,11 @@ export function BboxOverlay({ bbox, width, height, active, className, label }: P
   const h = (bbox.y1 - bbox.y0) * height;
   return (
     <div
-      className={cn("pointer-events-none absolute border-2", className, active && "ring-2 ring-offset-1")}
+      className={cn(
+        "pointer-events-none absolute border",
+        active ? "border-amber-600 bg-amber-400/10" : "border-neutral-400/60 bg-neutral-400/5",
+        className
+      )}
       style={{ left, top, width: w, height: h }}
     >
       {label && active ? (

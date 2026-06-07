@@ -79,7 +79,11 @@ def bind_corpus_tools(ctx: ToolContext) -> list:
         if result.refused:
             ctx.emit({"event": "step_refused", "tool": "answer_from_corpus", "query": question})
             return tool_json(refused=True, content=result.content)
-        refs = references_for_api(result.citation_map)
+        refs = references_for_api(
+            result.citation_map,
+            answer=result.content,
+            cited_only=True,
+        )
         if refs:
             ctx.emit(
                 {

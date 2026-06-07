@@ -3,9 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LayoutInspectorPanel } from "@/components/LayoutInspectorPanel";
-import { LayoutPDFViewer } from "@/components/LayoutPDFViewer";
+import { LayoutPDFViewer } from "@/components/pdf/PdfViewerDynamic";
 import { StatusBadge } from "@/components/ui/badge";
 import { picardApi } from "@/lib/picardApi";
 
@@ -25,21 +25,22 @@ export default function VaultDocumentPage() {
     },
   });
 
-  const { data: chunks = [], isLoading: chunksLoading } = useQuery({
-    queryKey: ["document-chunks", documentId, page],
-    queryFn: () => picardApi.getDocumentChunks(documentId, { page }),
+  const { data: allChunks = [], isLoading: chunksLoading } = useQuery({
+    queryKey: ["document-chunks", documentId, "all"],
+    queryFn: () => picardApi.getDocumentChunks(documentId),
     enabled: document?.parse_status === "done",
   });
 
-  useEffect(() => {
-    setSelectedChunkId(null);
-  }, [page]);
+  const pageChunks = useMemo(
+    () => allChunks.filter((c) => c.page_number === page),
+    [allChunks, page]
+  );
 
   useEffect(() => {
-    if (chunks.length > 0 && selectedChunkId && !chunks.some((c) => c.id === selectedChunkId)) {
+    if (pageChunks.length > 0 && selectedChunkId && !pageChunks.some((c) => c.id === selectedChunkId)) {
       setSelectedChunkId(null);
     }
-  }, [chunks, selectedChunkId]);
+  }, [pageChunks, selectedChunkId]);
 
   if (docLoading) {
     return (
@@ -77,7 +78,7 @@ export default function VaultDocumentPage() {
             documentId={documentId}
             page={page}
             onPageChange={setPage}
-            chunks={chunks}
+            chunks={allChunks}
             selectedChunkId={selectedChunkId}
             showAllBlocks={showAllBlocks}
           />
@@ -91,11 +92,15 @@ export default function VaultDocumentPage() {
             <LayoutInspectorPanel
               document={document}
               page={page}
-              chunks={chunks}
+              chunks={pageChunks}
               selectedChunkId={selectedChunkId}
               onSelectChunk={(id) => {
-                setSelectedChunkId(id);
-                setShowAllBlocks(false);
+                const chunk = allChunks.find((c) => c.id === id);
+                if (chunk) {
+                  setPage(chunk.page_number);
+                  setSelectedChunkId(id);
+                  setShowAllBlocks(false);
+                }
               }}
               showAllBlocks={showAllBlocks}
               onShowAllBlocksChange={setShowAllBlocks}

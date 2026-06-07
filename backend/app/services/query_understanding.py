@@ -121,6 +121,7 @@ class QueryUnderstanding(BaseModel):
     search_passes: list[SearchPass] = Field(default_factory=list)
     sub_questions: list[SubQuestion] = Field(default_factory=list)
     coverage_goal: str = ""
+    require_dates_facet: bool = False
     confidence: float = 0.5
     used_llm: bool = False
     rule_merges: list[str] = Field(default_factory=list)
@@ -209,8 +210,19 @@ _QUESTION_FRAMING_WORDS = frozenset(
 _CASE_QUERY_FRAMING = frozenset(
     {
         "list", "all", "case", "details", "detail", "on", "the", "involving", "about",
-        "show", "give", "tell",
+        "show", "give", "tell", "summary", "sections", "section", "context", "dates",
+        "detailed", "comprehensive", "significant", "brief", "short", "of",
     }
+)
+
+_OVERVIEW_DEPTH_ADJECTIVES = frozenset(
+    {"detailed", "summary", "comprehensive", "significant", "brief", "short", "thorough"}
+)
+
+_DEPTH_KEYWORD_RE = re.compile(
+    r"\b(?:detailed|comprehensive|significant|in[- ]depth|thorough)\b.*\b(?:summary|sections?|context|dates?)\b"
+    r"|\b(?:sections?|context|dates?|procedural\s+history)\b",
+    re.IGNORECASE,
 )
 
 
@@ -428,6 +440,13 @@ def _is_case_overview_query(query: str) -> bool:
         return True
     if re.search(r"\bcase\s+details\b.*\bfiled\s+by\b", q):
         return True
+    if _case_name_terms(query) and re.search(
+        r"\b(?:summary|overview|brief|sections?|context|dates?|detailed|comprehensive)\b",
+        q,
+    ):
+        return True
+    if _DEPTH_KEYWORD_RE.search(query):
+        return True
     return False
 
 
@@ -542,6 +561,21 @@ def _fallback_search_passes(
     return []
 
 
+def _is_singular_case_details_query(query: str) -> bool:
+    """One matter deep-dive, not a multi-document catalog."""
+    q = query.casefold()
+    if re.search(r"\blist\s+all\b", q):
+        return False
+    if re.search(r"\b(?:cases|matters|proceedings|complaints)\s+(?:against|involving|re)\b", q):
+        return False
+    if re.search(r"\ball\s+documents\s+(?:mentioning|involving)\b", q):
+        return False
+    return bool(
+        re.search(r"\bcase\s+details?\s+(?:against|involving|re)\b", q)
+        or re.search(r"\bgive\s+.*\bcase\s+details?\s+involving\b", q)
+    )
+
+
 def _should_use_case_overview_not_listing(query: str, case_terms: list[str] | None) -> bool:
     """'List case details on Winzo v Google' is one matter, not a catalog against Google."""
     if not case_terms:
@@ -579,7 +613,10 @@ def _validate_retrieval_plan(
     merges: list[str] = list(understanding.rule_merges)
     case_terms = _case_name_terms(query) or understanding.fts.must_terms[:2]
 
-    if (
+    if understanding.intent == "entity_matter_listing" and _is_singular_case_details_query(query):
+        understanding.intent = "case_overview"
+        merges.append("intent:listing_to_overview:singular_case_details")
+    elif (
         understanding.intent == "entity_matter_listing"
         and _should_use_case_overview_not_listing(query, case_terms)
     ):
@@ -735,6 +772,14 @@ def _apply_overview_fields(
     understanding.retrieval_mode = "SIMPLE"
     if not understanding.overview_facets:
         understanding.overview_facets = list(DEFAULT_OVERVIEW_FACETS)
+    q_cf = query.casefold()
+    if (
+        _DEPTH_KEYWORD_RE.search(query)
+        or "dates" in q_cf
+        or "procedural history" in q_cf
+        or ("sections" in q_cf and "summary" in q_cf)
+    ):
+        understanding.require_dates_facet = True
     if case_terms and not understanding.fts.must_terms:
         understanding.fts.must_terms = case_terms
 
@@ -1150,16 +1195,23 @@ def _case_name_terms(query: str) -> list[str] | None:
         left = _extract_tokens(parts[0])
         right = _extract_tokens(parts[1])
         if left and right:
-            # Prefer distinctive tokens (e.g. winzo, games) over framing words (list, case).
             left_keep = [
                 t
                 for t in left
-                if t not in _QUESTION_FRAMING_WORDS and t not in _CASE_QUERY_FRAMING
+                if t not in _QUESTION_FRAMING_WORDS
+                and t not in _CASE_QUERY_FRAMING
+                and t not in _OVERVIEW_DEPTH_ADJECTIVES
             ]
             right_keep = [
-                t for t in right if t not in _QUESTION_FRAMING_WORDS and t not in _CASE_QUERY_FRAMING
+                t
+                for t in right
+                if t not in _QUESTION_FRAMING_WORDS and t not in _CASE_QUERY_FRAMING
             ]
-            party_a = (left_keep or left)[0]
+            party_a = (
+                left_keep[-1]
+                if left_keep[0] in _OVERVIEW_DEPTH_ADJECTIVES
+                else left_keep[0]
+            )
             party_b = (right_keep or right)[0]
             return _dedupe_terms([party_a, party_b])
     if not settings.enable_regex_nlp:

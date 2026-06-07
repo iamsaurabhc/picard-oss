@@ -36,7 +36,21 @@ Setting: `chat_latency_profile` (`quality` | `balanced` | `fast`) in Settings or
 | **balanced** (default) | Skips non-critical SLM steps above; raises map-reduce min docs; enables fast-tier anchor FTS for simple/auto queries |
 | **fast** | Same SLM skips as balanced; tighter map caps; defers page-vector hybrid where safe |
 
-Diagnostics: each chat `retrieval` SSE event includes `diagnostics.latency_ms` (phase timers + `synthesis_ttft`). Benchmark with `python scripts/benchmark_chat_ttft.py` and compare profiles via `python scripts/eval_latency_profiles.py`.
+Diagnostics: each chat `retrieval` SSE event includes `diagnostics.latency_ms` (phase timers + `synthesis_ttft`). Overview queries also emit `depth_tier`, `demand_signals`, `facet_coverage`, `prompt_evidence`, and `coverage_report_in_prompt`. Benchmark with `python scripts/benchmark_chat_ttft.py` and compare profiles via `python scripts/eval_latency_profiles.py`.
+
+## Context depth (overview quality)
+
+Answer completeness for structured case summaries is driven by **query demand**, not latency profile:
+
+| Signal | Effect |
+|--------|--------|
+| `case_overview` intent | Baseline **deep** tier (more pages, gap-fill rounds) |
+| "detailed" + sections/dates | **exhaustive** tier |
+| Strict facet verification | Damages requires explicit £/sum; dates reject citation noise (e.g. `78FCR`) |
+| Unified coverage pipeline | Page-level overview runs `apply_context_coverage` — no `context_expansion_skipped` bypass |
+| Facet-grouped Sources | Prompt blocks under `### Evidence for: Damages` / `Dates` with aligned excerpt caps |
+
+**Invariant:** Chester overview (`chester_nat_026`) must include £1,000 in prompt Sources on **balanced and quality** profiles. See `tests/test_context_quality_overview.py`.
 
 
 - **Retrieval stride** during generation — hurts coherence; not used.

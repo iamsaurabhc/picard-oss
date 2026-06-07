@@ -7,7 +7,7 @@ from typing import Literal
 
 from app.config import settings
 from app.schemas import SearchHit
-from app.services.excerpt_selector import has_amount_signal, has_identity_signal, identity_signal_strength
+from app.services.excerpt_selector import has_amount_signal, has_explicit_monetary_amount, has_identity_signal, identity_signal_strength
 from app.services.fts_search import _chunk_is_informative
 from app.services.model_router import ModelRole, completion
 from app.services.prompt_registry import get_prompt
@@ -151,7 +151,7 @@ def _coverage_guardrails(
         for i, x in enumerate(selected):
             if (x.document_id, x.page_number) != key:
                 continue
-            if not has_amount_signal(x.text_content) or len((x.text_content or "").strip()) < 40:
+            if not has_explicit_monetary_amount(x.text_content):
                 evict_idx = i
                 break
         if evict_idx is None:
@@ -188,7 +188,9 @@ def _coverage_guardrails(
                 break
 
     if prefer_amounts:
-        amount_hits = [h for h in pool if has_amount_signal(h.text_content)]
+        amount_hits = [h for h in pool if has_explicit_monetary_amount(h.text_content)]
+        if not amount_hits:
+            amount_hits = [h for h in pool if has_amount_signal(h.text_content)]
         amount_hits.sort(
             key=lambda x: (
                 x.score,

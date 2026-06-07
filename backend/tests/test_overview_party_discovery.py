@@ -42,3 +42,26 @@ def test_party_scoped_flag_is_json_serializable_bool():
     assert party_scoped is True
     assert isinstance(party_scoped, bool)
     json.dumps({"party_scoped_discovery": party_scoped})
+
+
+def test_discover_overview_documents_singular_query_caps_one_doc(monkeypatch):
+    from app.services.overview_retrieval import _discover_overview_documents
+
+    rows = [("doc-a", 10), ("doc-b", 8), ("doc-c", 5)]
+
+    def _fake_discover(*args, **kwargs):
+        return rows, {"discovery_sources": {"fts": 3}}
+
+    monkeypatch.setattr(
+        "app.services.listing_discovery.discover_listing_documents",
+        _fake_discover,
+    )
+    u = QueryUnderstanding(intent="case_overview")
+    selected, _ = _discover_overview_documents(
+        None,  # type: ignore[arg-type]
+        u,
+        workspace_id="ws",
+        document_ids=None,
+        query="Give case details involving Aaqib Javeed",
+    )
+    assert selected == ["doc-a"]

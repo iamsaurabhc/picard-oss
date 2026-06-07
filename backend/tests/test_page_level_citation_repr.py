@@ -1,3 +1,8 @@
+import json
+import uuid
+
+from app.db.models import Chunk, Document, Workspace
+from app.db.session import utc_now_iso
 from app.services.citations import build_citation_map
 from app.services.entity_page_chunks import dedupe_hits_by_page, is_substantive_chunk_text
 from app.services.entity_page_context import best_representative_chunk, chunk_text_quality_score
@@ -69,6 +74,121 @@ def test_overview_page_level_excerpt_surfaces_damages_sentence():
     preview = cmap.refs[0].preview
     assert "£1,000" in preview or "1,000" in preview
     assert preview.index("1,000") < 200 or preview.index("£1,000") < 200
+
+
+def _seed_multi_chunk_page(db_session, chunks: list[tuple[str, str, float]]) -> tuple[str, dict[str, str]]:
+    """chunks: (chunk_id, text, y0) on page 1."""
+    now = utc_now_iso()
+    ws_id = str(uuid.uuid4())
+    doc_id = str(uuid.uuid4())
+    db_session.add(
+        Workspace(id=ws_id, name="test", matter_ref=None, created_at=now, updated_at=now)
+    )
+    db_session.add(
+        Document(
+            id=doc_id,
+            workspace_id=ws_id,
+            file_name="3920181652264686.pdf",
+            local_path="3920181652264686.pdf",
+            content_hash=str(uuid.uuid4()),
+            parse_status="done",
+            page_count=1,
+            created_at=now,
+        )
+    )
+    ids: dict[str, str] = {}
+    for chunk_id, text, y0 in chunks:
+        cid = str(uuid.uuid4())
+        ids[chunk_id] = cid
+        db_session.add(
+            Chunk(
+                id=cid,
+                document_id=doc_id,
+                page_number=1,
+                chunk_type="paragraph",
+                bbox_json=json.dumps({"x0": 0.1, "y0": y0, "x1": 0.9, "y1": y0 + 0.1}),
+                text_content=text,
+                heading_path="Body",
+                section_key=chunk_id,
+                token_count=40,
+            )
+        )
+    db_session.commit()
+    return doc_id, ids
+
+
+def test_page_level_preview_uses_merged_page_excerpt(db_session):
+    """Citation preview must reflect merged page text, not only the representative chunk."""
+    party_line = "Mr. Aaqib Javeed filed the information before the Competition Commission of India."
+    google_line = "Google India Private Limited Opposite Party No. 2 Registered Office Bangalore Karnataka"
+    doc_id, ids = _seed_multi_chunk_page(
+        db_session,
+        [
+            ("google", google_line, 0.5),
+            ("party", party_line, 0.1),
+        ],
+    )
+    merged = f"{party_line} {google_line}"
+    hit = SearchHit(
+        chunk_id=ids["google"],
+        document_id=doc_id,
+        page_number=1,
+        text_content=merged,
+        heading_path=None,
+        bbox={"x0": 0.1, "y0": 0.5, "x1": 0.9, "y1": 0.6},
+        score=1.0,
+    )
+    cmap = build_citation_map(
+        [hit],
+        page_level=True,
+        db=db_session,
+        intent="case_overview",
+        question="Give case details involving Aaqib Javeed",
+        excerpt_chars=800,
+    )
+    previews = " ".join(r.preview for r in cmap.refs)
+    assert "aaqib" in previews.casefold()
+
+
+def test_page_level_map_splits_multi_chunk_page_by_excerpt_binding(db_session):
+    court_text = "Case No. 39 of 2018 Competition Commission of India"
+    party_text = "Google India Private Limited Opposite Party No. 2 Registered Office Bangalore"
+    allegation_text = "Alleged contravention of Section 4 of the Competition Act 2002"
+    doc_id, ids = _seed_multi_chunk_page(
+        db_session,
+        [
+            ("court", court_text, 0.1),
+            ("party", party_text, 0.5),
+            ("allegation", allegation_text, 0.7),
+        ],
+    )
+    merged = f"{court_text} {party_text} {allegation_text}"
+    hit = SearchHit(
+        chunk_id=ids["party"],
+        document_id=doc_id,
+        page_number=1,
+        text_content=merged,
+        heading_path=None,
+        bbox={"x0": 0.1, "y0": 0.5, "x1": 0.9, "y1": 0.6},
+        score=1.0,
+    )
+    cmap = build_citation_map(
+        [hit],
+        page_level=True,
+        db=db_session,
+        intent="case_overview",
+        question="Give case details involving Aaqib Javeed",
+        excerpt_chars=800,
+    )
+    assert len(cmap.refs) >= 2
+    previews = " ".join(r.preview for r in cmap.refs)
+    assert "Case No. 39" in previews
+    assert "Google India" in previews
+    court_ref = next(r for r in cmap.refs if "Case No. 39" in (r.preview or ""))
+    assert court_ref.bbox is not None
+    assert court_ref.bbox["y0"] == 0.1
+    assert court_ref.page_chunks is not None
+    assert len(court_ref.page_chunks) >= 2
 
 
 def test_dedupe_hits_by_page_keeps_richest_text():

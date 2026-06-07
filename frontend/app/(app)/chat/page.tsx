@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { History } from "lucide-react";
+import { History, MessageSquarePlus } from "lucide-react";
 import {
   picardApi,
   ChatMessage,
@@ -17,7 +17,7 @@ import { useWorkspace } from "@/lib/workspaceContext";
 import { NoWorkspaceState } from "@/components/NoWorkspaceState";
 import { MarkdownWithCitations } from "@/components/MarkdownWithCitations";
 import { RetrievalActivityPanel } from "@/components/chat/RetrievalActivityPanel";
-import { ChatHistorySidebar } from "@/components/chat/ChatHistorySidebar";
+import { ChatHistoryRail } from "@/components/chat/ChatHistoryRail";
 import { useRetrievalActivity } from "@/components/chat/useRetrievalActivity";
 import { AgentPlanPanel } from "@/components/agent/AgentPlanPanel";
 import { MemoryHitChip } from "@/components/agent/MemoryHitChip";
@@ -25,7 +25,11 @@ import { ModeToggle } from "@/components/agent/ModeToggle";
 import { ScopeConfirmBar } from "@/components/agent/ScopeConfirmBar";
 import { ToolTimeline } from "@/components/agent/ToolTimeline";
 import { useAgentActivity } from "@/components/agent/useAgentActivity";
-import { MultiHighlightPDFViewer } from "@/components/MultiHighlightPDFViewer";
+import { MultiHighlightPDFViewer } from "@/components/pdf/PdfViewerDynamic";
+import { ResizableSplitPane } from "@/components/ResizableSplitPane";
+import { usePersistedBoolean } from "@/hooks/usePersistedBoolean";
+import { resolveCitationForClaim } from "@/lib/citationAnchor";
+import { useRequestTimer } from "@/hooks/useRequestTimer";
 import { isDevTestMode } from "@/lib/featureFlags";
 import { cn } from "@/lib/utils";
 
@@ -96,6 +100,7 @@ export default function ChatPage() {
   const [activeMessageRefs, setActiveMessageRefs] = useState<ChatReference[] | null>(null);
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = usePersistedBoolean("picard:chatHistoryCollapsed", false);
   const [loadingThread, setLoadingThread] = useState(false);
   const streamingRef = useRef(false);
   const initRef = useRef(false);
@@ -106,6 +111,7 @@ export default function ChatPage() {
   const loadThreadSeqRef = useRef(0);
   const activity = useRetrievalActivity();
   const agentActivity = useAgentActivity();
+  const requestTimer = useRequestTimer();
   const modeParam = searchParams.get("mode");
   const [chatMode, setChatMode] = useState<"rag" | "agent">(
     modeParam === "agent" ? "agent" : "rag"
@@ -263,6 +269,15 @@ export default function ChatPage() {
     [router, activity, loadThread]
   );
 
+  const collapseHistory = useCallback(() => {
+    setHistoryCollapsed(true);
+    setHistoryOpen(false);
+  }, [setHistoryCollapsed]);
+
+  const toggleHistoryDesktop = useCallback(() => {
+    setHistoryCollapsed((c) => !c);
+  }, [setHistoryCollapsed]);
+
   useEffect(() => {
     if (pendingNavigationRef.current && sessionParam === pendingNavigationRef.current) {
       pendingNavigationRef.current = null;
@@ -287,13 +302,13 @@ export default function ChatPage() {
       setActiveRef(null);
       setActiveMessageRefs(null);
       activity.reset();
-      setHistoryOpen(false);
+      collapseHistory();
       return;
     }
     const draft = await picardApi.createChatSession({ workspace_id: ws, reuse_draft: true });
     await refetchSessions();
     await selectSession(draft.id);
-  }, [ws, messages, sessionId, activity, refetchSessions, selectSession]);
+  }, [ws, messages, sessionId, activity, refetchSessions, selectSession, collapseHistory]);
 
   const handleDeleteSession = useCallback(
     async (id: string) => {
@@ -424,9 +439,11 @@ export default function ChatPage() {
     if (!sessionId || !ws || !input.trim() || streaming) return;
     const userText = input.trim();
     setInput("");
-    setMessages((m) => [...m, { role: "user", content: userText }, { role: "assistant", content: "" }]);
+    setMessages((m) => [...m, { role: "user", content: userText }]);
+    collapseHistory();
     setStreaming(true);
     streamingRef.current = true;
+    requestTimer.start();
     activity.reset();
     activity.start();
     if (effectiveMode === "agent") {
@@ -441,6 +458,7 @@ export default function ChatPage() {
     } finally {
       streamingRef.current = false;
       setStreaming(false);
+      requestTimer.stop();
       activity.finish();
     }
   };
@@ -477,6 +495,13 @@ export default function ChatPage() {
 
   const activeHighlights = activeMessageRefs ?? [];
   const showPdfPanel = pdfDocId != null && activeRef != null;
+
+  useEffect(() => {
+    if (showPdfPanel) {
+      collapseHistory();
+    }
+  }, [showPdfPanel, collapseHistory]);
+
   const knownDocIds = new Set((documents ?? []).map((d) => d.id));
   const scopedDocumentIds = documentIds.filter((id) => knownDocIds.has(id));
 
@@ -499,6 +524,18 @@ export default function ChatPage() {
   return (
     <div className="flex h-[calc(100vh)] flex-col">
       <header className="flex flex-wrap items-center gap-3 border-b border-neutral-200 bg-white px-4 py-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 w-8 shrink-0 p-0"
+          onClick={() => void handleNewChat()}
+          disabled={streaming || loadingThread}
+          title="New chat"
+          aria-label="New chat"
+        >
+          <MessageSquarePlus className="h-4 w-4" />
+        </Button>
         <Button
           type="button"
           variant="outline"
@@ -546,16 +583,28 @@ export default function ChatPage() {
         <div
           className={cn(
             "absolute inset-y-0 left-0 z-20 lg:relative lg:z-auto",
-            historyOpen ? "block" : "hidden lg:block"
+            historyOpen ? "block" : "hidden lg:flex"
           )}
         >
-          <ChatHistorySidebar
+          <ChatHistoryRail
             sessions={sessions}
             activeId={sessionId}
             loading={sessionsLoading}
             disabled={streaming || loadingThread}
-            onSelect={selectSession}
-            onNewChat={handleNewChat}
+            collapsed={historyCollapsed && !historyOpen}
+            mobileOverlay={historyOpen}
+            onToggleCollapse={() => {
+              if (historyOpen) {
+                setHistoryOpen(false);
+              } else {
+                toggleHistoryDesktop();
+              }
+            }}
+            onSelect={(id) => {
+              void selectSession(id);
+              setHistoryOpen(false);
+            }}
+            onNewChat={() => void handleNewChat()}
             onDelete={handleDeleteSession}
           />
         </div>
@@ -568,14 +617,17 @@ export default function ChatPage() {
           />
         ) : null}
 
-        <div
-          className={cn(
-            "grid min-w-0 flex-1 overflow-hidden",
-            showPdfPanel && "grid-cols-2 divide-x divide-neutral-200"
-          )}
-        >
-          <div className="flex flex-col overflow-hidden">
-            <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {showPdfPanel ? (
+          <ResizableSplitPane
+            direction="horizontal"
+            initialRatio={0.45}
+            minPrimary={280}
+            minSecondary={320}
+            storageKey="picard:chatPdfSplit"
+            className="min-w-0 flex-1"
+            primary={
+              <div className="flex h-full flex-col overflow-hidden">
+                <div className="flex-1 space-y-4 overflow-y-auto p-4">
               {effectiveMode === "agent" && (
                 <>
                   <MemoryHitChip memories={agentActivity.memories} />
@@ -602,7 +654,11 @@ export default function ChatPage() {
               {loadingThread && messages.length === 0 ? (
                 <p className="text-sm text-neutral-500">Loading conversation…</p>
               ) : null}
-              {messages.map((m) => (
+              {messages.map((m) => {
+                if (m.role === "assistant" && !m.content && !m.refused && streaming) {
+                  return null;
+                }
+                return (
                 <div
                   key={m.id ?? `${m.role}-${m.content.slice(0, 32)}`}
                   className={cn("flex w-full", m.role === "user" ? "justify-end" : "justify-start")}
@@ -634,10 +690,15 @@ export default function ChatPage() {
                         <MarkdownWithCitations
                           text={m.content}
                           references={m.references}
-                          onCitationClick={(ref) => {
-                            setActiveRef(ref);
-                            setActiveMessageRefs(m.references ?? []);
-                            setPdfDocId(ref.document_id);
+                          onCitationClick={(ref, claimText) => {
+                            const resolved = resolveCitationForClaim(
+                              ref,
+                              claimText,
+                              m.references ?? undefined
+                            );
+                            setActiveRef(resolved);
+                            setActiveMessageRefs([resolved]);
+                            setPdfDocId(resolved.document_id);
                           }}
                         />
                         {m.references && m.references.length > 0 ? (
@@ -650,7 +711,8 @@ export default function ChatPage() {
                     )}
                   </div>
                 </div>
-              ))}
+              );
+              })}
               {showActivityPanel && (
                 <RetrievalActivityPanel
                   steps={activity.steps}
@@ -658,6 +720,133 @@ export default function ChatPage() {
                   isStreaming={streaming}
                   shouldMinimize={activity.shouldMinimize}
                   retrievalSummary={activity.retrievalSummary}
+                  elapsedMs={requestTimer.elapsedMs}
+                />
+              )}
+              {showAgentToolsPanel ? (
+                <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2">
+                  <ToolTimeline steps={agentActivity.toolSteps} />
+                </div>
+              ) : null}
+            </div>
+                <form onSubmit={onSend} className="flex gap-2 border-t border-neutral-200 p-4">
+                  <Input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Ask about your documents…"
+                    disabled={streaming || !sessionId || loadingThread}
+                  />
+                  <Button type="submit" disabled={streaming || !sessionId || loadingThread}>
+                    Send
+                  </Button>
+                </form>
+              </div>
+            }
+            secondary={
+              <MultiHighlightPDFViewer
+                documentId={pdfDocId}
+                highlights={activeHighlights}
+                activeIndex={activeRef?.index ?? null}
+                activeRef={activeRef}
+              />
+            }
+          />
+        ) : (
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="flex-1 space-y-4 overflow-y-auto p-4">
+              {effectiveMode === "agent" && (
+                <>
+                  <MemoryHitChip memories={agentActivity.memories} />
+                  {agentActivity.pendingApproval?.kind === "scope" && (
+                    <ScopeConfirmBar
+                      approval={agentActivity.pendingApproval}
+                      onApprove={() => void handleApproveScope()}
+                      onDeny={agentActivity.clearApproval}
+                    />
+                  )}
+                  <AgentPlanPanel
+                    planText={agentActivity.planText}
+                    workflowDraft={agentActivity.workflowDraft}
+                    pendingApproval={agentActivity.pendingApproval}
+                    workspaceId={ws}
+                    onApprovePlan={() => {
+                      const t = agentActivity.pendingApproval?.token;
+                      if (t) void runStream("Approve workflow plan.", { approval_token: t });
+                    }}
+                    onSaveWorkflow={(title) => void handleSaveWorkflow(title)}
+                  />
+                </>
+              )}
+              {loadingThread && messages.length === 0 ? (
+                <p className="text-sm text-neutral-500">Loading conversation…</p>
+              ) : null}
+              {messages.map((m) => {
+                if (m.role === "assistant" && !m.content && !m.refused && streaming) {
+                  return null;
+                }
+                return (
+                  <div
+                    key={m.id ?? `${m.role}-${m.content.slice(0, 32)}`}
+                    className={cn("flex w-full", m.role === "user" ? "justify-end" : "justify-start")}
+                  >
+                    <div
+                      className={cn(
+                        "max-w-[85%] text-sm",
+                        m.role === "user"
+                          ? "rounded-2xl rounded-br-sm bg-neutral-900 px-4 py-2.5 text-neutral-50"
+                          : "rounded-2xl rounded-bl-sm border border-neutral-200 bg-white px-4 py-3 text-neutral-900"
+                      )}
+                    >
+                      {m.role === "user" ? (
+                        <p className="whitespace-pre-wrap">{m.content}</p>
+                      ) : m.refused ? (
+                        <div>
+                          <p className="font-medium text-neutral-700">No evidence found</p>
+                          <MarkdownWithCitations text={m.content} className="mt-1" />
+                          {m.suggestions && m.suggestions.length > 0 && (
+                            <ul className="mt-2 list-disc pl-5 text-neutral-600">
+                              {m.suggestions.map((s) => (
+                                <li key={s}>{s}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <MarkdownWithCitations
+                            text={m.content}
+                            references={m.references}
+                            onCitationClick={(ref, claimText) => {
+                              const resolved = resolveCitationForClaim(
+                                ref,
+                                claimText,
+                                m.references ?? undefined
+                              );
+                              setActiveRef(resolved);
+                              setActiveMessageRefs([resolved]);
+                              setPdfDocId(resolved.document_id);
+                            }}
+                          />
+                          {m.references && m.references.length > 0 ? (
+                            <p className="mt-2 text-xs text-neutral-500">
+                              Sources ({m.references.length}) — click [{m.references[0]?.index ?? 1}]
+                              {m.references.length > 1 ? "…" : ""} in the answer
+                            </p>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {showActivityPanel && (
+                <RetrievalActivityPanel
+                  steps={activity.steps}
+                  stepCount={activity.stepCount}
+                  isStreaming={streaming}
+                  shouldMinimize={activity.shouldMinimize}
+                  retrievalSummary={activity.retrievalSummary}
+                  elapsedMs={requestTimer.elapsedMs}
                 />
               )}
               {showAgentToolsPanel ? (
@@ -678,16 +867,7 @@ export default function ChatPage() {
               </Button>
             </form>
           </div>
-
-          {showPdfPanel ? (
-            <MultiHighlightPDFViewer
-              documentId={pdfDocId}
-              highlights={activeHighlights}
-              activeIndex={activeRef?.index ?? null}
-              activeRef={activeRef}
-            />
-          ) : null}
-        </div>
+        )}
       </div>
     </div>
   );

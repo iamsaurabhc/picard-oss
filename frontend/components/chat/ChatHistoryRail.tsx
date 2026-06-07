@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MessageSquarePlus, Trash2 } from "lucide-react";
+import { History, MessageSquarePlus, PanelLeft, Trash2 } from "lucide-react";
 import type { ChatSessionSummary } from "@/lib/picardApi";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,9 @@ type Props = {
   activeId: string | null;
   loading?: boolean;
   disabled?: boolean;
+  collapsed: boolean;
+  mobileOverlay?: boolean;
+  onToggleCollapse: () => void;
   onSelect: (sessionId: string) => void;
   onNewChat: () => void;
   onDelete?: (sessionId: string) => void;
@@ -30,32 +33,25 @@ function formatRelativeTime(iso: string): string {
   return date.toLocaleDateString();
 }
 
-export function ChatHistorySidebar({
+function SessionList({
   sessions,
   activeId,
   loading,
   disabled,
   onSelect,
-  onNewChat,
   onDelete,
-}: Props) {
+}: {
+  sessions: ChatSessionSummary[];
+  activeId: string | null;
+  loading?: boolean;
+  disabled?: boolean;
+  onSelect: (sessionId: string) => void;
+  onDelete?: (sessionId: string) => void;
+}) {
   const [deleteTarget, setDeleteTarget] = useState<ChatSessionSummary | null>(null);
 
   return (
-    <aside className="flex h-full w-60 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
-      <div className="border-b border-neutral-200 p-3">
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full justify-start gap-2 bg-white"
-          onClick={onNewChat}
-          disabled={disabled}
-        >
-          <MessageSquarePlus className="h-4 w-4" />
-          New chat
-        </Button>
-      </div>
-
+    <>
       <div className="flex-1 overflow-y-auto p-2">
         {loading ? (
           <p className="px-2 py-4 text-xs text-neutral-500">Loading chats…</p>
@@ -100,6 +96,7 @@ export function ChatHistorySidebar({
                       <button
                         type="button"
                         title="Delete chat"
+                        aria-label="Delete chat"
                         disabled={disabled}
                         onClick={() => setDeleteTarget(s)}
                         className="mr-1 mt-2 rounded p-1 text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-red-700 group-hover:opacity-100"
@@ -142,6 +139,98 @@ export function ChatHistorySidebar({
           </div>
         </div>
       ) : null}
+    </>
+  );
+}
+
+export function ChatHistoryRail({
+  sessions,
+  activeId,
+  loading,
+  disabled,
+  collapsed,
+  mobileOverlay = false,
+  onToggleCollapse,
+  onSelect,
+  onNewChat,
+  onDelete,
+}: Props) {
+  if (collapsed && !mobileOverlay) {
+    return (
+      <aside className="flex h-full w-12 shrink-0 flex-col items-center gap-2 border-r border-neutral-200 bg-neutral-50 py-3">
+        <button
+          type="button"
+          title="New chat"
+          aria-label="New chat"
+          disabled={disabled}
+          onClick={onNewChat}
+          className="flex h-9 w-9 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-700 transition-colors hover:bg-neutral-100 disabled:opacity-50"
+        >
+          <MessageSquarePlus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          title="Chat history"
+          aria-label="Expand chat history"
+          disabled={disabled}
+          onClick={onToggleCollapse}
+          className="flex h-9 w-9 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50"
+        >
+          <PanelLeft className="h-4 w-4" />
+        </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside
+      className={cn(
+        "flex h-full w-60 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50",
+        mobileOverlay && "shadow-lg"
+      )}
+    >
+      <div className="flex items-center gap-2 border-b border-neutral-200 p-3">
+        <Button
+          type="button"
+          variant="outline"
+          className="min-w-0 flex-1 justify-start gap-2 bg-white"
+          onClick={onNewChat}
+          disabled={disabled}
+        >
+          <MessageSquarePlus className="h-4 w-4 shrink-0" />
+          New chat
+        </Button>
+        {!mobileOverlay ? (
+          <button
+            type="button"
+            title="Collapse history"
+            aria-label="Collapse chat history"
+            onClick={onToggleCollapse}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            title="Close history"
+            aria-label="Close chat history"
+            onClick={onToggleCollapse}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+          >
+            <History className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <SessionList
+        sessions={sessions}
+        activeId={activeId}
+        loading={loading}
+        disabled={disabled}
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />
     </aside>
   );
 }

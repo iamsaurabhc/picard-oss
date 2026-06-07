@@ -292,6 +292,24 @@ export type ChatReference = {
   document_name?: string | null;
   heading_path?: string | null;
   pinpoint_quote?: string | null;
+  highlight_bboxes?: Record<string, number>[] | null;
+  sentence_anchors?: Array<{
+    sentence: string;
+    chunk_id: string;
+    bbox?: Record<string, number> | null;
+    score?: number;
+  }> | null;
+  page_chunks?: Array<{
+    chunk_id: string;
+    text: string;
+    bbox?: Record<string, number> | null;
+  }> | null;
+  document_binding_chunks?: Array<{
+    chunk_id: string;
+    text: string;
+    bbox?: Record<string, number> | null;
+    page?: number;
+  }> | null;
 };
 
 export type ChatSessionSummary = {
@@ -401,6 +419,7 @@ export type ChatProgressPhase =
   | "search"
   | "page_rank"
   | "coverage"
+  | "context"
   | "map"
   | "reduce"
   | "rank"
@@ -423,7 +442,12 @@ export type ChatStreamEvent =
       constraint_count?: number;
       intersection_pages?: number;
       document_name?: string;
+      document_id?: string;
       documents_discovered?: number;
+      documents_to_map?: number;
+      brief_count?: number;
+      chunk_count?: number;
+      pages_selected?: number[];
       target_entity?: string;
       [key: string]: unknown;
     }

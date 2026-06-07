@@ -25,6 +25,7 @@ from app.services.context_coverage import apply_context_coverage
 from app.services.context_ranker import RankMode, rank_context
 from app.services.model_router import ModelRole, stream_completion
 from app.services.query_understanding import QueryUnderstanding
+from app.services.retrieval_depth import RetrievalDepthPolicy
 
 REFUSAL_MESSAGE = "No relevant information was found in the selected documents."
 
@@ -88,6 +89,9 @@ def merge_evidence_maps(
                     document_name=ref.document_name,
                     heading_path=ref.heading_path,
                     pinpoint_quote=ref.pinpoint_quote,
+                    highlight_bboxes=ref.highlight_bboxes,
+                    sentence_anchors=ref.sentence_anchors,
+                    page_chunks=ref.page_chunks,
                 )
             )
             chunk_to_index[ref.chunk_id] = new_index
@@ -173,46 +177,22 @@ def rank_and_cover_hits(
     top_k: int,
     rank_mode: RankMode,
     page_level_pool: bool = False,
+    depth_policy: RetrievalDepthPolicy | None = None,
 ) -> tuple[list[SearchHit], dict]:
     """Rank retrieval pool and apply context coverage; returns diagnostics delta."""
     diagnostics: dict = {}
+    effective_top_k = depth_policy.top_k if depth_policy else top_k
+    gap_fill_rounds = depth_policy.gap_fill_rounds if depth_policy else 1
+
     ranked_hits, rank_diagnostics = rank_context(
         query,
         understanding,
         hits,
-        top_k=top_k,
+        top_k=effective_top_k,
         rank_mode=rank_mode,
     )
     diagnostics.update(rank_diagnostics)
-    if page_level_pool:
-        covered = ranked_hits[:top_k]
-        if understanding.intent == "case_overview" and understanding.sub_questions:
-            from app.services.context_coverage import compute_coverage_report, gap_fill_retrieval
-            from app.services.entity_page_chunks import dedupe_hits_by_page, merge_search_hits
 
-            report = compute_coverage_report(covered, understanding, rank_diagnostics=rank_diagnostics)
-            needs_fill = any(v is None for v in report.sub_question_coverage.values())
-            if needs_fill:
-                pool = {h.chunk_id: h for h in covered}
-                pool, filled = gap_fill_retrieval(
-                    db,
-                    query=query,
-                    understanding=understanding,
-                    workspace_id=workspace_id,
-                    document_ids=document_ids,
-                    pool=pool,
-                    report=report,
-                )
-                if filled:
-                    merged = merge_search_hits(covered, sorted(pool.values(), key=lambda h: h.score))
-                    covered = dedupe_hits_by_page(merged)[:top_k]
-                    diagnostics["overview_gap_fill"] = filled
-        diagnostics["context_expansion_skipped"] = True
-        diagnostics["page_level_pool"] = True
-        diagnostics["ranked_count"] = len(covered)
-        diagnostics["pages_in_context"] = sorted({h.page_number for h in covered})
-        diagnostics["documents_in_context"] = sorted({h.document_id for h in covered})
-        return covered, diagnostics
     covered, coverage_diag = apply_context_coverage(
         db,
         ranked_hits,
@@ -221,10 +201,13 @@ def rank_and_cover_hits(
         workspace_id=workspace_id,
         document_ids=document_ids,
         bundles=bundles,
-        top_k=top_k,
+        top_k=effective_top_k,
         rank_diagnostics=rank_diagnostics,
+        gap_fill_rounds=gap_fill_rounds,
+        page_level_pool=page_level_pool,
     )
     diagnostics.update(coverage_diag)
+    diagnostics["ranked_count"] = len(covered)
     diagnostics["pages_in_context"] = sorted({h.page_number for h in covered})
     diagnostics["documents_in_context"] = sorted({h.document_id for h in covered})
     if understanding.intent == "entity_matter_listing":
@@ -250,12 +233,15 @@ def build_evidence_prompt_and_map(
     coverage_report: dict | None = None,
     synthesis_mode: str = "chat",
     agent_profile: str = "firm",
+    prompt_excerpt_cap: int | None = None,
 ) -> tuple[CitationMap, str]:
     excerpt_chars = _excerpt_chars_for_intent(
         understanding.intent,
         is_listing=is_listing,
         is_overview=is_overview,
     )
+    if prompt_excerpt_cap is not None:
+        excerpt_chars = max(excerpt_chars, prompt_excerpt_cap)
     citation_map = build_citation_map(
         hits,
         bundles,
@@ -284,6 +270,7 @@ def build_evidence_prompt_and_map(
         coverage_goal=understanding.coverage_goal,
         synthesis_mode=synthesis_mode,
         agent_profile=agent_profile,
+        excerpt_cap=prompt_excerpt_cap,
     )
     return citation_map, system_prompt
 
@@ -483,7 +470,7 @@ async def run_corpus_evidence_step(
         refused=False,
         content=validated,
         citation_map=citation_map,
-        references=references_for_api(citation_map),
+        references=references_for_api(citation_map, answer=validated, cited_only=True),
         validation=validation,
         judge=judge_result,
         diagnostics=diagnostics,
@@ -571,10 +558,11 @@ async def stream_corpus_evidence_step(
         search_mode=search_mode,
         allow_partial_disclosure=allow_partial_disclosure,
     )
+    api_refs = references_for_api(cmap, answer=validated, cited_only=True)
     yield {
         "event": "final",
         "content": validated,
-        "references": references_for_api(cmap),
+        "references": api_refs,
         "refused": False,
         "citation_validation": {
             "markers_valid": validation.markers_valid,

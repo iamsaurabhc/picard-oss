@@ -36,6 +36,7 @@ from app.services.agent_retrieval_policy import (
     routing_flags_from_policy,
 )
 from app.services.query_understanding import understand_query, understanding_summary, _case_name_terms
+from app.services.retrieval_depth import depth_policy_to_diagnostics, resolve_retrieval_depth
 from app.services.search import execute_search
 
 
@@ -175,7 +176,17 @@ def _retrieve_for_chat_body(
     if not agent_deep:
         out.is_overview = understanding.intent == "case_overview"
         out.is_listing = understanding.intent == "entity_matter_listing"
-    out.retrieval_diagnostics = {"understanding": understanding_summary(understanding)}
+
+    depth_policy = resolve_retrieval_depth(
+        body.message,
+        understanding,
+        is_overview=out.is_overview,
+        is_listing=out.is_listing,
+    )
+    out.retrieval_diagnostics = {
+        "understanding": understanding_summary(understanding),
+        **depth_policy_to_diagnostics(depth_policy),
+    }
     if policy:
         out.retrieval_diagnostics["agent_policy"] = {
             "breadth": policy.breadth,
@@ -289,7 +300,7 @@ def _retrieve_for_chat_body(
             query=body.message,
         )
         out.retrieval_diagnostics.update(overview_diag)
-        top_k = settings.chat_overview_top_k
+        top_k = depth_policy.top_k
         rank_mode = "coverage"
         out.refused = len(hits) == 0
     else:
@@ -368,6 +379,7 @@ def _retrieve_for_chat_body(
             top_k=top_k,
             rank_mode=rank_mode,  # type: ignore[arg-type]
             page_level_pool=overview_page_context,
+            depth_policy=depth_policy,
         )
         out.retrieval_diagnostics.update(rank_cover_diag)
     else:
@@ -412,6 +424,7 @@ def _retrieve_for_chat_body(
             coverage_report=coverage_report,
             synthesis_mode=synthesis_mode,
             agent_profile=profile,
+            prompt_excerpt_cap=depth_policy.prompt_excerpt_cap,
         )
         if body.tabular_review_id:
             from app.services.citations import TABULAR_CELL_CITE_HINT

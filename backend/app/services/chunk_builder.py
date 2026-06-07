@@ -108,8 +108,8 @@ def _extract_lines_from_liteparse(result) -> list[ParsedLine]:
                     text=text,
                     x0=x,
                     y0=y,
-                    x1=x + max(w, 1),
-                    y1=y + max(h, 1),
+                    x1=x + (w if w > 2 else page_width * 0.8),
+                    y1=y + (h if h > 2 else max(12.0, page_height * 0.018)),
                     page_width=page_width,
                     page_height=page_height,
                 )

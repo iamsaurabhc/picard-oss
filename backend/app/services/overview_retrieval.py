@@ -12,7 +12,11 @@ from app.services.planned_retrieval import (
     PlannedRetrievalConfig,
     planned_retrieve_with_progress,
 )
-from app.services.query_understanding import QueryUnderstanding, _case_name_terms
+from app.services.query_understanding import (
+    QueryUnderstanding,
+    _case_name_terms,
+    _is_singular_case_details_query,
+)
 from app.services.retrieval_progress import RetrievalProgressEmitter
 
 
@@ -36,8 +40,14 @@ def _discover_overview_documents(
     )
     if not doc_rows:
         return [], diag
-    limit = settings.overview_page_context_max_docs
-    return [doc_id for doc_id, _ in doc_rows[:limit]], diag
+    limit = (
+        1
+        if _is_singular_case_details_query(query)
+        else settings.overview_page_context_max_docs
+    )
+    selected = [doc_id for doc_id, _ in doc_rows[:limit]]
+    diag["doc_rows_preview"] = doc_rows[:5]
+    return selected, diag
 
 
 def overview_retrieve_with_progress(
@@ -68,11 +78,7 @@ def overview_retrieve_with_progress(
             document_ids=document_ids,
             query=query,
         )
-        sources = discovery_diag.get("discovery_sources") or {}
-        weak_party_signal = (
-            sources.get("entity", 0) == 0 and sources.get("entity_tokens", 0) == 0
-        )
-        if document_ids and (not discovered or weak_party_signal):
+        if document_ids and not discovered:
             discovered, discovery_diag = _discover_overview_documents(
                 db,
                 understanding,

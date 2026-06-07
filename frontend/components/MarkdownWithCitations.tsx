@@ -31,20 +31,33 @@ function splitSegments(text: string): Segment[] {
   return segments;
 }
 
+function claimTextForCitation(segments: Segment[], citeSegmentIndex: number): string {
+  const parts: string[] = [];
+  for (let i = citeSegmentIndex - 1; i >= 0; i--) {
+    const seg = segments[i];
+    if (seg.type !== "text") break;
+    parts.unshift(seg.content);
+    if (/[.!?]\s*$/.test(seg.content)) break;
+  }
+  return parts.join("").replace(/\[\d+\]/g, "").trim();
+}
+
 function CitationButton({
   index,
   reference,
+  claimText,
   onCitationClick,
 }: {
   index: number;
   reference?: ChatReference;
-  onCitationClick?: (ref: ChatReference) => void;
+  claimText: string;
+  onCitationClick?: (ref: ChatReference, claimText?: string) => void;
 }) {
   return (
     <button
       type="button"
       className="mx-0.5 inline rounded bg-neutral-200 px-1.5 py-0.5 text-xs font-medium text-neutral-800 hover:bg-neutral-300 align-baseline"
-      onClick={() => reference && onCitationClick?.(reference)}
+      onClick={() => reference && onCitationClick?.(reference, claimText)}
     >
       [{index}]
     </button>
@@ -54,7 +67,7 @@ function CitationButton({
 function renderInlineCitations(
   text: string,
   byIndex: Map<number, ChatReference>,
-  onCitationClick?: (ref: ChatReference) => void,
+  onCitationClick?: (ref: ChatReference, claimText?: string) => void,
   keyPrefix = ""
 ): React.ReactNode {
   const segments = splitSegments(text);
@@ -68,6 +81,7 @@ function renderInlineCitations(
           key={`${keyPrefix}-cite-${i}-${seg.index}`}
           index={seg.index}
           reference={byIndex.get(seg.index)}
+          claimText={claimTextForCitation(segments, i)}
           onCitationClick={onCitationClick}
         />
       );
@@ -79,7 +93,7 @@ function renderInlineCitations(
 function injectCitations(
   children: React.ReactNode,
   byIndex: Map<number, ChatReference>,
-  onCitationClick?: (ref: ChatReference) => void,
+  onCitationClick?: (ref: ChatReference, claimText?: string) => void,
   keyPrefix = ""
 ): React.ReactNode {
   if (children == null) return children;
@@ -115,7 +129,7 @@ function injectCitations(
 
 function makeCitationComponents(
   byIndex: Map<number, ChatReference>,
-  onCitationClick?: (ref: ChatReference) => void
+  onCitationClick?: (ref: ChatReference, claimText?: string) => void
 ): Components {
   const wrap = (
     Tag: "p" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "blockquote" | "strong" | "em"
@@ -145,7 +159,7 @@ function makeCitationComponents(
 type Props = {
   text: string;
   references?: ChatReference[];
-  onCitationClick?: (ref: ChatReference) => void;
+  onCitationClick?: (ref: ChatReference, claimText?: string) => void;
   className?: string;
 };
 
