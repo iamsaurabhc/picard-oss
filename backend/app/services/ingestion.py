@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 from app.db.models import Chunk, Document, Job
 from app.db.session import SessionLocal, utc_now_iso
 from app.services.chunk_builder import build_chunks_from_pdf, new_chunk_id
+from app.services.docx_chunk_builder import build_chunks_from_docx
 from app.services.entity_index import extract_entities_for_document
-from app.services.storage import resolve_pdf_path
+from app.services.storage import resolve_document_path
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ def _update_job(db: Session, job_id: str, **kwargs) -> None:
     db.commit()
 
 
+def _document_file_type(doc: Document) -> str:
+    return getattr(doc, "file_type", None) or "pdf"
+
+
 def _parse_document_sync(document_id: str, job_id: str) -> None:
     db = SessionLocal()
     try:
@@ -71,19 +76,27 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
         _update_job(db, job_id, status="running", progress=0.1)
         db.commit()
 
-        pdf_path = resolve_pdf_path(doc.local_path)
-        from app.services.parse_plan import build_parse_plan
+        file_path = resolve_document_path(doc.local_path)
+        file_type = _document_file_type(doc)
 
-        plan = build_parse_plan(str(pdf_path))
-        doc.text_source = plan.text_source
-        doc.ocr_engine = "none" if not plan.ocr_enabled else plan.ocr_engine
-        db.commit()
+        if file_type == "docx":
+            with _parse_lock:
+                chunks, page_count, parse_meta = build_chunks_from_docx(str(file_path))
+            doc.text_source = parse_meta.get("text_source")
+            doc.ocr_engine = parse_meta.get("ocr_engine")
+        else:
+            from app.services.parse_plan import build_parse_plan
 
-        with _parse_lock:
-            chunks, page_count, parse_meta = build_chunks_from_pdf(str(pdf_path), plan=plan)
+            plan = build_parse_plan(str(file_path))
+            doc.text_source = plan.text_source
+            doc.ocr_engine = "none" if not plan.ocr_enabled else plan.ocr_engine
+            db.commit()
 
-        doc.text_source = parse_meta.get("text_source")
-        doc.ocr_engine = parse_meta.get("ocr_engine")
+            with _parse_lock:
+                chunks, page_count, parse_meta = build_chunks_from_pdf(str(file_path), plan=plan)
+
+            doc.text_source = parse_meta.get("text_source")
+            doc.ocr_engine = parse_meta.get("ocr_engine")
 
         db.execute(delete(Chunk).where(Chunk.document_id == document_id))
         db.flush()
@@ -100,6 +113,7 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
                     heading_path=built.heading_path,
                     section_key=built.section_key,
                     token_count=built.token_count,
+                    anchor_json=built.anchor_json,
                 )
             )
 
@@ -149,8 +163,9 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
 def _prepare_document_for_retry(db: Session, doc: Document) -> None:
     doc.parse_status = "pending"
     doc.parse_error = None
-    doc.text_source = None
-    doc.ocr_engine = None
+    if _document_file_type(doc) == "pdf":
+        doc.text_source = None
+        doc.ocr_engine = None
 
 
 def enqueue_parse_document(document_id: str) -> str:

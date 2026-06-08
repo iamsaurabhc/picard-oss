@@ -158,3 +158,78 @@ body {
   border: 1px solid var(--composer-border);
   border-bottom-left-radius: 0.125rem;
 }
+
+/* SuperDoc editor host — bounded panel with internal pan/scroll when zoomed */
+.docx-superdoc-host {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 0%;
+  overflow: hidden;
+}
+
+.docx-superdoc-host .superdoc-wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Keep toolbar within the panel; responsiveToContainer collapses items, this is the fallback */
+.docx-superdoc-host .superdoc-toolbar-container {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.docx-superdoc-host .superdoc-toolbar-container .superdoc-toolbar,
+.docx-superdoc-host .superdoc-toolbar-container .sd-toolbar {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Primary scrollport: pan horizontally + vertically when zoomed */
+.docx-superdoc-host .superdoc-editor-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto !important;
+  overscroll-behavior: contain;
+}
+
+/* Let zoomed document expand so the editor container can scroll it */
+.docx-superdoc-host .superdoc--contained,
+.docx-superdoc-host .superdoc--contained .superdoc__layers,
+.docx-superdoc-host .superdoc--contained .superdoc__document,
+.docx-superdoc-host .superdoc--contained .superdoc__sub-document {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
+.docx-superdoc-host .super-editor-container.contained {
+  overflow: visible !important;
+  height: auto !important;
+  min-height: 100%;
+}
+
+.docx-comments-panel {
+  min-height: 0;
+}
+
+.docx-comments-panel > div:last-child {
+  width: 100%;
+  min-height: 0;
+}
+

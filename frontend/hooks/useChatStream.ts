@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef } from "react";
+import { publishDocxSuggestion } from "@/lib/docxSuggestionStore";
 import { picardApi, type ChatStreamEvent } from "@/lib/picardApi";
 
 export type StreamResult = {
@@ -48,6 +49,14 @@ export function useChatStream(onEvent?: (ev: ChatStreamEvent) => void) {
         if (ev.event === "content" && "delta" in ev) {
           streamBuffer += ev.delta;
           scheduleFlush();
+        } else if (ev.event === "docx_suggestion") {
+          publishDocxSuggestion({
+            document_id: ev.document_id,
+            find: ev.find,
+            replace: ev.replace,
+            change_mode: ev.change_mode,
+            rationale: ev.rationale,
+          });
         } else if (ev.event === "references") {
           if (timerRef.current) {
             clearTimeout(timerRef.current);

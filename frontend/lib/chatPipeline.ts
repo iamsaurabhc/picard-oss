@@ -1,4 +1,5 @@
-import { picardApi, type ChatStreamEvent } from "@/lib/picardApi";
+import { publishDocxSuggestion } from "@/lib/docxSuggestionStore";
+import { picardApi, type ChatStreamEvent, type DocxSuggestion } from "@/lib/picardApi";
 import { TABULAR_TEMPLATES } from "@/lib/tabular/columnPresets";
 import type { AttachedDocument, PipelineEvent, SendParams } from "@/lib/unifiedChatTypes";
 import { mergeDocumentScope } from "@/lib/unifiedChatTypes";
@@ -110,6 +111,16 @@ export async function* executeSend(
       if (ev.event === "content" && "delta" in ev) {
         assistant += ev.delta;
         yield { type: "assistant_delta", delta: ev.delta };
+      } else if (ev.event === "docx_suggestion") {
+        const suggestion: DocxSuggestion = {
+          document_id: ev.document_id,
+          find: ev.find,
+          replace: ev.replace,
+          change_mode: ev.change_mode,
+          rationale: ev.rationale,
+        };
+        publishDocxSuggestion(suggestion);
+        yield { type: "docx_suggestion", suggestion };
       } else if (ev.event === "references") {
         refs = ev.references ?? [];
         if (typeof ev.content === "string" && ev.content.length > 0) assistant = ev.content;

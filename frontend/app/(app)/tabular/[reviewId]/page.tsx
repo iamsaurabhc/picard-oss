@@ -174,7 +174,10 @@ export default function TabularReviewPage() {
   }
 
   async function handleDropFiles(files: FileList) {
-    const pdfs = Array.from(files).filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+    const pdfs = Array.from(files).filter((f) => {
+      const lower = f.name.toLowerCase();
+      return lower.endsWith(".pdf") || lower.endsWith(".docx");
+    });
     for (const file of pdfs) {
       setUploadingNames((n) => [...n, file.name]);
       try {

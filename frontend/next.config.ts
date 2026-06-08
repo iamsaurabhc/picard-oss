@@ -11,6 +11,21 @@ const nextConfig = {
     // Chat uses useSearchParams without a Suspense boundary during static analysis
     missingSuspenseWithCSRBailout: false,
   },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+        ],
+      },
+      {
+        source: "/libreoffice-wasm/:path*",
+        headers: [{ key: "Cross-Origin-Resource-Policy", value: "cross-origin" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

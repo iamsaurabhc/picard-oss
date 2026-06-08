@@ -24,6 +24,10 @@ frontend/.env.local
 frontend/.next/
 frontend/out/
 
+# LibreOffice WASM — copied by scripts/copy-libreoffice-wasm.sh on npm postinstall (too large for GitHub)
+frontend/public/libreoffice-wasm/*
+!frontend/public/libreoffice-wasm/.gitkeep
+
 # OS / IDE
 .DS_Store
 .idea/

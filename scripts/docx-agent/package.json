@@ -1,0 +1,8 @@
+{
+  "name": "picard-docx-agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@superdoc-dev/sdk": "^1.15.0"
+  }
+}

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 from sqlalchemy import create_engine, text
 
 from app.config import settings
-from app.services.storage import resolve_pdf_path
+from app.services.storage import resolve_document_path
 
 
 def _pdf_page_count(pdf_path: Path) -> int | None:
@@ -84,7 +84,7 @@ def inspect(document_id: str) -> int:
             {"id": document_id, "min_page": stats["min_page"] or 0, "max_page": stats["max_page"] or 0},
         ).scalars().all()
 
-    pdf_path = resolve_pdf_path(doc["local_path"])
+    pdf_path = resolve_document_path(doc["local_path"])
     actual_pages = _pdf_page_count(pdf_path)
 
     print(json.dumps({"document": dict(doc), "chunks": dict(stats), "pdf_path": str(pdf_path)}, indent=2))

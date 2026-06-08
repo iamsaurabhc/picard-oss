@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { FileUp, FolderOpen, Plus } from "lucide-react";
+import { DOCUMENT_UPLOAD_ACCEPT } from "@/lib/documentTypes";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -46,7 +47,7 @@ export function AddContextMenu({ onUpload, onBrowseVault, disabled, uploadReques
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,application/pdf"
+        accept={DOCUMENT_UPLOAD_ACCEPT}
         multiple
         className="hidden"
         onChange={(e) => {

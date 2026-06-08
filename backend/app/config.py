@@ -242,6 +242,10 @@ class Settings(BaseSettings):
         return self.picard_data_dir / "pdfs"
 
     @property
+    def documents_dir(self) -> Path:
+        return self.picard_data_dir / "documents"
+
+    @property
     def mem0_dir(self) -> Path:
         if self.mem0_data_dir:
             return Path(self.mem0_data_dir)

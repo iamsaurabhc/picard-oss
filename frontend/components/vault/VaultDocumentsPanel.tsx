@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell } from "@/components/PageShell";
 import { DocumentParseInfo, OcrServerBanner } from "@/components/DocumentParseInfo";
+import { DOCUMENT_UPLOAD_ACCEPT, documentTypeLabel, isAcceptedDocumentFile } from "@/lib/documentTypes";
 import { picardApi } from "@/lib/picardApi";
 import { usePollingDocuments } from "@/components/vault/usePollingDocuments";
 
@@ -50,7 +51,7 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
     (files: FileList | null) => {
       if (!files?.length) return;
       Array.from(files).forEach((file) => {
-        if (file.name.toLowerCase().endsWith(".pdf")) upload.mutate(file);
+        if (isAcceptedDocumentFile(file)) upload.mutate(file);
       });
     },
     [upload]
@@ -62,8 +63,8 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
         title="Vault"
         subtitle={
           workspaceName
-            ? `${workspaceName} — upload and manage PDFs for parsing and indexing.`
-            : "Upload PDFs for parsing and indexing."
+            ? `${workspaceName} — upload and manage documents for parsing and indexing.`
+            : "Upload PDFs and Word documents for parsing and indexing."
         }
       />
 
@@ -79,7 +80,7 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
               Processing {inProgress.length} document{inProgress.length === 1 ? "" : "s"}
             </p>
             <p className="mt-0.5 text-blue-800/90">
-              PDFs are parsed one at a time. Large files or OCR layouts can take several minutes each.
+              Documents are parsed one at a time. Large files or OCR layouts can take several minutes each.
               This page refreshes automatically.
             </p>
           </div>
@@ -109,11 +110,11 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
           onFiles(e.dataTransfer.files);
         }}
       >
-        <p className="mb-3 text-sm text-neutral-600">Drag and drop PDF files here</p>
+        <p className="mb-3 text-sm text-neutral-600">Drag and drop PDF or Word (.docx) files here</p>
         <input
           ref={inputRef}
           type="file"
-          accept="application/pdf"
+          accept={DOCUMENT_UPLOAD_ACCEPT}
           className="hidden"
           multiple
           onChange={(e) => onFiles(e.target.files)}
@@ -144,6 +145,7 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
           <thead className="bg-neutral-50 text-left text-neutral-600">
             <tr>
               <th className="px-4 py-2 font-medium">Document</th>
+              <th className="px-4 py-2 font-medium">Type</th>
               <th className="px-4 py-2 font-medium">Status</th>
               <th className="px-4 py-2 font-medium">Source</th>
               <th className="px-4 py-2 font-medium">Pages</th>
@@ -152,7 +154,7 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-neutral-500">
+                <td colSpan={5} className="px-4 py-6 text-neutral-500">
                   Loading…
                 </td>
               </tr>
@@ -170,6 +172,9 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
                     ) : (
                       doc.file_name
                     )}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-neutral-600">
+                    {documentTypeLabel(doc.file_type)}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={doc.parse_status} />
@@ -192,7 +197,7 @@ export function VaultDocumentsPanel({ workspaceId, workspaceName }: Props) {
             )}
             {!isLoading && documents.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-neutral-500">
+                <td colSpan={5} className="px-4 py-8 text-center text-neutral-500">
                   No documents uploaded.
                 </td>
               </tr>

@@ -35,8 +35,9 @@ sys.path.insert(0, ".")
 from app.db.models import Chunk, Document
 from app.db.session import SessionLocal, init_db
 from app.services.chunk_builder import build_chunks_from_pdf, new_chunk_id
+from app.services.docx_chunk_builder import build_chunks_from_docx
 from app.services.parse_plan import build_parse_plan
-from app.services.storage import resolve_pdf_path
+from app.services.storage import resolve_document_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,13 +48,17 @@ logger = logging.getLogger(__name__)
 
 def reparse_document(db, doc: Document) -> int:
     """Re-parse a single document, returning the new chunk count."""
-    pdf_path = resolve_pdf_path(doc.local_path)
-    if not pdf_path.exists():
-        logger.warning("  PDF not found: %s — skipping", pdf_path)
+    file_path = resolve_document_path(doc.local_path)
+    if not file_path.exists():
+        logger.warning("  File not found: %s — skipping", file_path)
         return -1
 
-    plan = build_parse_plan(str(pdf_path))
-    chunks, page_count, parse_meta = build_chunks_from_pdf(str(pdf_path), plan=plan)
+    file_type = getattr(doc, "file_type", None) or "pdf"
+    if file_type == "docx":
+        chunks, page_count, parse_meta = build_chunks_from_docx(str(file_path))
+    else:
+        plan = build_parse_plan(str(file_path))
+        chunks, page_count, parse_meta = build_chunks_from_pdf(str(file_path), plan=plan)
 
     # Delete old chunks
     db.execute(delete(Chunk).where(Chunk.document_id == doc.id))
@@ -72,6 +77,7 @@ def reparse_document(db, doc: Document) -> int:
                 heading_path=built.heading_path,
                 section_key=built.section_key,
                 token_count=built.token_count,
+                anchor_json=built.anchor_json,
             )
         )
 

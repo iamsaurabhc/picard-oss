@@ -60,9 +60,17 @@ class DocumentOut(BaseModel):
     parse_error: str | None
     text_source: str | None = None
     ocr_engine: str | None = None
+    file_type: Literal["pdf", "docx"] = "pdf"
+    source_document_id: str | None = None
     created_at: str
 
     model_config = {"from_attributes": True}
+
+
+class DocumentConvertToDocxOut(BaseModel):
+    document_id: str
+    file_name: str
+    method: Literal["chunks", "wasm"]
 
 
 class OcrHealthOut(BaseModel):
@@ -88,6 +96,26 @@ class ChunkOut(BaseModel):
     heading_path: str | None
     section_key: str | None
     token_count: int | None
+    anchor: dict | None = None
+
+
+class DocxSuggestionOut(BaseModel):
+    document_id: str
+    find: str
+    replace: str
+    change_mode: Literal["tracked", "direct"] = "tracked"
+    rationale: str | None = None
+
+
+class DocxMutateRequest(BaseModel):
+    pattern: str = Field(min_length=1)
+    replacement: str
+    tracked: bool = True
+    reindex: bool = True
+
+
+class DocxSearchRequest(BaseModel):
+    pattern: str = Field(min_length=1)
 
 
 class SearchRequest(BaseModel):

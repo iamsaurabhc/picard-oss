@@ -29,6 +29,10 @@ class Document(Base):
     parse_error: Mapped[str | None] = mapped_column(String, nullable=True)
     text_source: Mapped[str | None] = mapped_column(String, nullable=True)
     ocr_engine: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_type: Mapped[str] = mapped_column(String, default="pdf", nullable=False)
+    source_document_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[str] = mapped_column(String, nullable=False)
 
     workspace: Mapped["Workspace"] = relationship(back_populates="documents")
@@ -47,6 +51,7 @@ class Chunk(Base):
     heading_path: Mapped[str | None] = mapped_column(String, nullable=True)
     section_key: Mapped[str | None] = mapped_column(String, nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    anchor_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     document: Mapped["Document"] = relationship(back_populates="chunks")
 

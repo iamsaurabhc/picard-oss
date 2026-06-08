@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef } from "react";
+import { isAcceptedDocumentFile } from "@/lib/documentTypes";
 import { picardApi } from "@/lib/picardApi";
 import type { AttachedDocument, AttachmentStatus } from "@/lib/unifiedChatTypes";
 
@@ -56,9 +57,9 @@ export function useDocumentUpload(
   const uploadFiles = useCallback(
     async (files: File[]) => {
       if (!workspaceId) return [] as AttachedDocument[];
-      const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+      const accepted = files.filter(isAcceptedDocumentFile);
       const results: AttachedDocument[] = [];
-      for (const file of pdfs) {
+      for (const file of accepted) {
         const doc = await picardApi.uploadDocument(workspaceId, file);
         const att: AttachedDocument = {
           id: doc.id,

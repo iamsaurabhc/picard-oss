@@ -333,6 +333,15 @@ export function UnifiedChatContainer() {
               columnCount: ev.columnCount,
             },
           ]);
+        } else if (ev.type === "docx_suggestion") {
+          const s = ev.suggestion;
+          setMessages((m) => [
+            ...m.filter((x) => x.type !== "indexing_notice"),
+            {
+              type: "assistant_qa",
+              content: `Suggested DOCX edit: replace "${s.find}" with "${s.replace}". Open the document in Vault to review and apply.`,
+            },
+          ]);
         } else if (ev.type === "error") {
           setMessages((m) => [
             ...m.filter((x) => x.type !== "indexing_notice"),

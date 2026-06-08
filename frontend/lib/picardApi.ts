@@ -43,6 +43,8 @@ export type WorkspaceOverview = {
   recent_documents: DocumentRecord[];
 };
 
+export type DocumentFileType = "pdf" | "docx";
+
 export type DocumentRecord = {
   id: string;
   workspace_id: string;
@@ -53,7 +55,23 @@ export type DocumentRecord = {
   parse_error: string | null;
   text_source: string | null;
   ocr_engine: string | null;
+  file_type: DocumentFileType;
+  source_document_id: string | null;
   created_at: string;
+};
+
+export type ChunkAnchor = {
+  para_id?: string;
+  block_index?: number;
+  table_index?: number;
+};
+
+export type DocxSuggestion = {
+  document_id: string;
+  find: string;
+  replace: string;
+  change_mode?: "tracked" | "direct";
+  rationale?: string | null;
 };
 
 export type ChunkRecord = {
@@ -66,6 +84,13 @@ export type ChunkRecord = {
   heading_path: string | null;
   section_key: string | null;
   token_count: number | null;
+  anchor?: ChunkAnchor | null;
+};
+
+export type DocumentConvertToDocxResult = {
+  document_id: string;
+  file_name: string;
+  method: "chunks" | "wasm";
 };
 
 export type AppSettings = {
@@ -492,7 +517,8 @@ export type ChatStreamEvent =
   | { event: "tool_result"; tool?: string; output?: unknown }
   | { event: "workflow_draft"; flow_json: WorkflowRecord["flow_json"]; goal?: string }
   | { event: "workflow_applied"; workflow_id: string; title?: string }
-  | { event: "step_refused"; tool?: string; query?: string };
+  | { event: "step_refused"; tool?: string; query?: string }
+  | ({ event: "docx_suggestion" } & DocxSuggestion);
 
 type RequestOptions = {
   timeoutMs?: number;
@@ -631,14 +657,46 @@ export const picardApi = {
   getWorkspaceOverview: (id: string) => request<WorkspaceOverview>(`/workspaces/${id}/overview`),
   listDocuments: (workspaceId: string) =>
     request<DocumentRecord[]>(`/workspaces/${workspaceId}/documents`),
-  uploadDocument: async (workspaceId: string, file: File) => {
+  documentFileUrl,
+  uploadDocument: async (workspaceId: string, file: File, sourceDocumentId?: string) => {
     const form = new FormData();
     form.append("file", file);
-    return request<DocumentRecord>(`/workspaces/${workspaceId}/documents`, {
+    const qs = sourceDocumentId ? `?source_document_id=${encodeURIComponent(sourceDocumentId)}` : "";
+    return request<DocumentRecord>(`/workspaces/${workspaceId}/documents${qs}`, {
       method: "POST",
       body: form,
     });
   },
+  updateDocumentFile: async (documentId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<DocumentRecord>(`/documents/${documentId}/file`, {
+      method: "PUT",
+      body: form,
+    });
+  },
+  docxMutate: (
+    documentId: string,
+    body: { pattern: string; replacement: string; tracked?: boolean; reindex?: boolean }
+  ) =>
+    request<DocumentRecord>(`/documents/${documentId}/docx/mutate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  docxSuggest: (
+    documentId: string,
+    body: { pattern: string; replacement: string; tracked?: boolean }
+  ) => request<DocxSuggestion>(`/documents/${documentId}/docx/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }),
+  convertPdfToDocx: (documentId: string, method: "chunks" | "wasm" = "chunks") =>
+    request<DocumentConvertToDocxResult>(
+      `/documents/${documentId}/convert-to-docx?method=${method}&save=true`,
+      { method: "POST" }
+    ),
   getDocument: (id: string) => request<DocumentRecord>(`/documents/${id}`),
   getDocumentChunks: (documentId: string, params?: { page?: number }) => {
     const qs = params?.page != null ? `?page=${params.page}` : "";

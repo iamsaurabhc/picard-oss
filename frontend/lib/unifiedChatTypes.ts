@@ -1,4 +1,4 @@
-import type { ChatReference } from "@/lib/picardApi";
+import type { ChatReference, DocxSuggestion } from "@/lib/picardApi";
 import type { TabularTemplateId } from "@/lib/tabular/columnPresets";
 
 export type ComposerMode = "ask" | "review";
@@ -28,7 +28,8 @@ export type UnifiedMessage =
       documents: { id: string; name: string; status: string }[];
     }
   | { type: "tabular_preview"; id?: string; reviewId: string; title: string; columnCount: number }
-  | { type: "error"; id?: string; detail: string; retry?: () => void };
+  | { type: "error"; id?: string; detail: string; retry?: () => void }
+  | { type: "docx_suggestion"; id?: string; suggestion: DocxSuggestion };
 
 export type PipelineEvent =
   | { type: "assistant_delta"; delta: string }
@@ -41,7 +42,8 @@ export type PipelineEvent =
     }
   | { type: "tabular_preview"; reviewId: string; title: string; columnCount: number }
   | { type: "indexing"; ready: number; total: number }
-  | { type: "error"; detail: string };
+  | { type: "error"; detail: string }
+  | { type: "docx_suggestion"; suggestion: DocxSuggestion };
 
 export type SendParams = {
   message: string;

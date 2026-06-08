@@ -35,6 +35,7 @@ class BuiltChunk:
     heading_path: str | None
     section_key: str | None
     token_count: int
+    anchor_json: str | None = None
 
 
 def _section_key(heading_path: str | None) -> str | None:

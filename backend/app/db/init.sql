@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS documents (
   parse_error TEXT,
   text_source TEXT,
   ocr_engine TEXT,
+  file_type TEXT NOT NULL DEFAULT 'pdf',
+  source_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
 );
@@ -35,6 +37,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   heading_path TEXT,
   section_key TEXT,
   token_count INTEGER,
+  anchor_json TEXT,
   FOREIGN KEY (document_id) REFERENCES documents(id)
 );
 

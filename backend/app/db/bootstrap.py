@@ -26,6 +26,17 @@ def run_migrations(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE documents ADD COLUMN text_source TEXT"))
             if "ocr_engine" not in doc_cols:
                 conn.execute(text("ALTER TABLE documents ADD COLUMN ocr_engine TEXT"))
+            if "file_type" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN file_type TEXT NOT NULL DEFAULT 'pdf'"))
+            if "source_document_id" not in doc_cols:
+                conn.execute(text(
+                    "ALTER TABLE documents ADD COLUMN source_document_id TEXT "
+                    "REFERENCES documents(id) ON DELETE SET NULL"
+                ))
+
+        chunk_cols = _column_names(conn, "chunks")
+        if chunk_cols and "anchor_json" not in chunk_cols:
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN anchor_json TEXT"))
 
         session_cols = _column_names(conn, "chat_sessions")
         if session_cols:

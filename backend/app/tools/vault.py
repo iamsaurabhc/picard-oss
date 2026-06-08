@@ -9,6 +9,7 @@ from app.db.models import Document, Job
 from app.services.agent_hitl import consume_approval, create_approval, scope_hitl_required
 from app.services.chat import update_session
 from app.schemas import ChatSessionUpdate
+from app.services.docx_agent import build_docx_suggestion
 from app.tools.context import ToolContext
 from app.tools.response import tool_json
 
@@ -109,5 +110,30 @@ def bind_vault_tools(ctx: ToolContext) -> list:
         "description": "Hint: upload via UI; returns job id for wait_parse_job.",
     }
     tools.append(upload_documents)
+
+    def propose_docx_edit(document_id: str, find: str, replace: str, rationale: str = "") -> str:
+        doc = ctx.db.get(Document, document_id)
+        if not doc or doc.workspace_id != ctx.workspace_id:
+            return tool_json(refused=True, error="Document not found in workspace")
+        if (getattr(doc, "file_type", None) or "pdf") != "docx":
+            return tool_json(refused=True, error="propose_docx_edit only applies to DOCX files")
+        suggestion = build_docx_suggestion(
+            document_id=document_id,
+            find=find,
+            replace=replace,
+            change_mode="tracked",
+            rationale=rationale or None,
+        )
+        ctx.emit({"event": "docx_suggestion", **suggestion})
+        return tool_json(refused=False, content=json.dumps(suggestion))
+
+    propose_docx_edit.tool_info = {
+        "name": "propose_docx_edit",
+        "description": (
+            "Propose a tracked DOCX find/replace for the user to apply in the vault editor. "
+            "Emits docx_suggestion SSE for in-browser review."
+        ),
+    }
+    tools.append(propose_docx_edit)
 
     return tools
