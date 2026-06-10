@@ -63,6 +63,22 @@ def _document_file_type(doc: Document) -> str:
     return getattr(doc, "file_type", None) or "pdf"
 
 
+def _enrich_profile_background(document_id: str) -> None:
+    db = SessionLocal()
+    try:
+        from app.services.document_profile import enrich_profile_with_slm
+
+        profile = enrich_profile_with_slm(db, document_id)
+        if profile:
+            db.commit()
+            _ingestion_log(f"profile enrich done document_id={document_id} v={profile.profile_version}")
+    except Exception as exc:
+        logger.warning("profile enrich background failed for %s: %s", document_id, exc)
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _parse_document_sync(document_id: str, job_id: str) -> None:
     db = SessionLocal()
     try:
@@ -134,6 +150,15 @@ def _parse_document_sync(document_id: str, job_id: str) -> None:
         from app.services.metadata_extractor import extract_metadata_for_document
 
         extract_metadata_for_document(db, document_id)
+
+        stored_chunks = list(
+            db.scalars(select(Chunk).where(Chunk.document_id == document_id)).all()
+        )
+        from app.services.document_profile import save_profile_v0
+
+        save_profile_v0(db, document_id, stored_chunks)
+        db.commit()
+        _executor.submit(_enrich_profile_background, document_id)
 
         from app.config import settings as app_settings
         if app_settings.enable_hybrid_search:

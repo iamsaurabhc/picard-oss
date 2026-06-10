@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "postinstall": "bash ../scripts/copy-pdf-worker.sh && bash ../scripts/copy-libreoffice-wasm.sh && bash ../scripts/copy-superdoc-fonts.sh",
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node init && next dev",
+    "build": "node init && next build",
+    "start": "node init && next start",
     "lint": "next lint",
     "test": "vitest run"
   },

@@ -15,8 +15,6 @@ backend/**/__pycache__/
 *.db-wal
 
 # Env
-.env
-.env.local
 backend/.env
 frontend/.env.local
 
@@ -31,7 +29,6 @@ frontend/public/libreoffice-wasm/*
 # OS / IDE
 .DS_Store
 .idea/
-.vscode/
 
 # Python
 *.egg-info/
@@ -39,3 +36,7 @@ dist/
 build/
 backend/vendor/tessdata/*.traineddata
 backend/vendor/tiktoken_cache/*
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+config.bat

@@ -4,9 +4,13 @@ import type { DocxSuggestion } from "@/lib/picardApi";
 type DocApi = {
   query?: {
     match?: (input: {
-      select: { type: "text"; pattern: string };
+      select: { type: "text"; pattern: string; caseSensitive?: boolean };
       require?: string;
-    }) => Promise<{ matches?: Array<{ ref?: string }> }>;
+      limit?: number;
+    }) => Promise<{
+      items?: Array<{ handle?: { ref?: string } }>;
+      matches?: Array<{ ref?: string }>;
+    }>;
   };
   edit?: {
     replace?: (input: {
@@ -35,11 +39,17 @@ export async function applyDocxSuggestion(
     return true;
   }
 
-  const result = await doc.query.match({
-    select: { type: "text", pattern: suggestion.find },
-    require: "first",
-  });
-  const ref = result.matches?.[0]?.ref;
+  let ref: string | undefined;
+  try {
+    const result = await doc.query.match({
+      select: { type: "text", pattern: suggestion.find, caseSensitive: false },
+      require: "any",
+      limit: 1,
+    });
+    ref = result.items?.[0]?.handle?.ref ?? result.matches?.[0]?.ref;
+  } catch {
+    ref = undefined;
+  }
   if (!ref) return false;
 
   await doc.edit.replace({

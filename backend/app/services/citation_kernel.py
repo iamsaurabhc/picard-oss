@@ -155,7 +155,15 @@ def build_step_context_prompt(prior_outputs: list[EvidenceStepResult]) -> str:
     return "\n".join(lines)
 
 
-def _excerpt_chars_for_intent(intent: str, *, is_listing: bool, is_overview: bool) -> int:
+def _excerpt_chars_for_intent(
+    intent: str,
+    *,
+    is_listing: bool,
+    is_overview: bool,
+    retrieval_unit: str | None = None,
+) -> int:
+    if retrieval_unit == "table_row":
+        return 900
     if is_listing:
         return settings.chat_listing_map_excerpt_chars
     if is_overview:
@@ -239,6 +247,7 @@ def build_evidence_prompt_and_map(
         understanding.intent,
         is_listing=is_listing,
         is_overview=is_overview,
+        retrieval_unit=understanding.retrieval_unit,
     )
     if prompt_excerpt_cap is not None:
         excerpt_chars = max(excerpt_chars, prompt_excerpt_cap)
@@ -251,9 +260,11 @@ def build_evidence_prompt_and_map(
         sub_questions=understanding.sub_questions,
         prefer_amounts=is_overview,
         prefer_listing=is_listing,
-        page_level=is_listing or is_overview,
+        page_level=(is_listing or is_overview)
+        and understanding.retrieval_unit != "table_row",
         intent=understanding.intent,
         coverage_goal=understanding.coverage_goal,
+        retrieval_unit=understanding.retrieval_unit,
         db=db,
         workspace_id=workspace_id,
     )
@@ -271,6 +282,9 @@ def build_evidence_prompt_and_map(
         synthesis_mode=synthesis_mode,
         agent_profile=agent_profile,
         excerpt_cap=prompt_excerpt_cap,
+        synthesis_outline=understanding.synthesis_outline or None,
+        profile_canonical_kind=understanding.profile_canonical_kind,
+        profile_anti_patterns=understanding.profile_anti_patterns or None,
     )
     return citation_map, system_prompt
 

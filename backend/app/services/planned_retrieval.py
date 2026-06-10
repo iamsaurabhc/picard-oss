@@ -43,6 +43,8 @@ def _fts_hit_to_search_hit(hit: FtsHit) -> SearchHit:
         section_key=hit.section_key,
         bbox=parse_bbox(hit.bbox_json),
         score=hit.score,
+        chunk_type=hit.chunk_type,
+        anchor_json=hit.anchor_json,
     )
 
 
