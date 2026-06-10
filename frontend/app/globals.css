@@ -224,6 +224,13 @@ body {
   min-height: 100%;
 }
 
+/* Chat citation highlight — table row or paragraph (PDF-like focus) */
+.picard-docx-citation-highlight {
+  background: rgba(250, 204, 21, 0.42) !important;
+  box-shadow: inset 0 0 0 2px rgb(234, 179, 8);
+  transition: background 0.2s ease;
+}
+
 .docx-comments-panel {
   min-height: 0;
 }

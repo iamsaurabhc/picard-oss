@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Chunk, Entity, MetadataTag, PageEntity
+from app.services.document_profile import load_profiles_for_documents
 from app.services.fts_search import _chunk_is_informative
 
 
@@ -18,9 +19,29 @@ class DocumentContext:
     entity_samples: dict[str, list[str]] = field(default_factory=dict)
     heading_samples: list[str] = field(default_factory=list)
     page_previews: list[str] = field(default_factory=list)
+    document_profiles: dict[str, dict] = field(default_factory=dict)
 
     def to_prompt_block(self) -> str:
         lines = ["Document context (use vocabulary from these excerpts when choosing FTS terms):"]
+        for doc_id, profile in self.document_profiles.items():
+            kind = profile.get("canonical_kind") or ""
+            labels = profile.get("kind_labels") or []
+            structure = profile.get("structure") or {}
+            outline = profile.get("synthesis_outline") or []
+            if kind or labels:
+                lines.append(f"- Document profile ({doc_id[:8]}…): kind={kind!r} labels={labels}")
+            if structure.get("primary_unit"):
+                lines.append(f"  primary_unit={structure['primary_unit']}")
+            if structure.get("columns"):
+                lines.append(f"  table_columns: {' | '.join(structure['columns'][:8])}")
+            if structure.get("overview_facets"):
+                facet_labels = [
+                    f.get("label") for f in structure["overview_facets"][:6] if isinstance(f, dict)
+                ]
+                if facet_labels:
+                    lines.append(f"  overview_facets: {', '.join(facet_labels)}")
+            if outline:
+                lines.append(f"  synthesis_outline: {'; '.join(outline[:8])}")
         if self.doc_type:
             lines.append(f"- Document type: {self.doc_type}")
         if self.parties:
@@ -124,6 +145,11 @@ def build_document_context(
                 break
 
     ctx.page_previews = previews
+
+    profiles = load_profiles_for_documents(db, list(document_ids))
+    for doc_id, profile in profiles.items():
+        ctx.document_profiles[doc_id] = profile.to_dict()
+
     return ctx
 
 

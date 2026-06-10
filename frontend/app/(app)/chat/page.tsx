@@ -25,7 +25,7 @@ import { ModeToggle } from "@/components/agent/ModeToggle";
 import { ScopeConfirmBar } from "@/components/agent/ScopeConfirmBar";
 import { ToolTimeline } from "@/components/agent/ToolTimeline";
 import { useAgentActivity } from "@/components/agent/useAgentActivity";
-import { MultiHighlightPDFViewer } from "@/components/pdf/PdfViewerDynamic";
+import { ChatPdfPanel } from "@/components/unified-chat/ChatPdfPanel";
 import { ResizableSplitPane } from "@/components/ResizableSplitPane";
 import { usePersistedBoolean } from "@/hooks/usePersistedBoolean";
 import { resolveCitationForClaim } from "@/lib/citationAnchor";
@@ -104,6 +104,7 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false);
   const [activeRef, setActiveRef] = useState<ChatReference | null>(null);
   const [activeMessageRefs, setActiveMessageRefs] = useState<ChatReference[] | null>(null);
+  const [activeClaimText, setActiveClaimText] = useState<string | null>(null);
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = usePersistedBoolean("picard:chatHistoryCollapsed", false);
@@ -724,8 +725,9 @@ export default function ChatPage() {
                               m.references ?? undefined
                             );
                             setActiveRef(resolved);
-                            setActiveMessageRefs([resolved]);
-                            setPdfDocId(resolved.document_id);
+                            setActiveMessageRefs(m.references ?? [resolved]);
+                            setActiveClaimText(claimText ?? null);
+                            setPdfDocId(resolved.document_id ?? documentIds[0] ?? null);
                           }}
                         />
                         {m.references && m.references.length > 0 ? (
@@ -770,12 +772,19 @@ export default function ChatPage() {
               </div>
             }
             secondary={
-              <MultiHighlightPDFViewer
-                documentId={pdfDocId}
-                highlights={activeHighlights}
-                activeIndex={activeRef?.index ?? null}
-                activeRef={activeRef}
-              />
+              activeRef ? (
+                <ChatPdfPanel
+                  documentId={pdfDocId!}
+                  activeRef={activeRef}
+                  highlights={activeHighlights}
+                  activeClaimText={activeClaimText}
+                  onClose={() => {
+                    setPdfDocId(null);
+                    setActiveRef(null);
+                    setActiveClaimText(null);
+                  }}
+                />
+              ) : null
             }
           />
         ) : (
@@ -850,8 +859,9 @@ export default function ChatPage() {
                                 m.references ?? undefined
                               );
                               setActiveRef(resolved);
-                              setActiveMessageRefs([resolved]);
-                              setPdfDocId(resolved.document_id);
+                              setActiveMessageRefs(m.references ?? [resolved]);
+                              setActiveClaimText(claimText ?? null);
+                              setPdfDocId(resolved.document_id ?? documentIds[0] ?? null);
                             }}
                           />
                           {m.references && m.references.length > 0 ? (

@@ -8,8 +8,11 @@ from app.prompts.legal_rag import contrastive_block, preamble_for_variant
 from app.schemas import ContextBundleOut, SearchHit
 from app.services.excerpt_selector import (
     has_identity_signal,
+    is_table_row_hit,
     overview_facet_excerpt,
+    overview_row_excerpt,
     select_excerpts,
+    table_row_excerpt,
 )
 from app.services.query_understanding import SubQuestion
 
@@ -125,6 +128,7 @@ def build_citation_map(
     page_level: bool = False,
     intent: str = "general",
     coverage_goal: str = "",
+    retrieval_unit: str | None = None,
     db=None,
     workspace_id: str | None = None,
 ) -> CitationMap:
@@ -149,13 +153,28 @@ def build_citation_map(
         prefer_listing
         or (intent == "entity_matter_listing" and settings.listing_disable_focus_excerpts)
     )
+    table_primary = retrieval_unit == "table_row" or any(
+        is_table_row_hit(h) for h in unique_hits
+    )
     if page_level:
-        overview_focus = intent == "case_overview"
+        overview_focus = intent == "case_overview" and not table_primary
         excerpts: dict[str, str] = {}
+        if table_primary:
+            excerpts = overview_row_excerpt(
+                unique_hits,
+                excerpt_chars,
+                question=question,
+                sub_questions=sub_questions,
+            )
         slm_hits: list[SearchHit] = []
         for h in unique_hits:
+            if h.chunk_id in excerpts:
+                continue
             text = h.text_content or ""
             prefer_amounts_here = prefer_amounts or overview_focus
+            if is_table_row_hit(h):
+                excerpts[h.chunk_id] = table_row_excerpt(h, excerpt_chars)
+                continue
             focused = (
                 overview_facet_excerpt(
                     text,
@@ -189,6 +208,13 @@ def build_citation_map(
                 excerpts[h.chunk_id] = batched.get(h.chunk_id) or _fallback_excerpt(
                     h.text_content or "", excerpt_chars,
                 )
+    elif table_primary:
+        excerpts = overview_row_excerpt(
+            unique_hits,
+            excerpt_chars,
+            question=question,
+            sub_questions=sub_questions,
+        )
     else:
         excerpts = select_excerpts(
             unique_hits,
@@ -243,7 +269,7 @@ def build_citation_map(
             )
         )
 
-    if page_level and db is not None:
+    if page_level and db is not None and not table_primary:
         from app.schemas import SearchHit
         from app.services.entity_page_context import (
             _best_chunk_for_sentence,
@@ -418,6 +444,9 @@ def build_system_prompt(
     synthesis_mode: str = "chat",
     agent_profile: str = "firm",
     excerpt_cap: int | None = None,
+    synthesis_outline: list[str] | None = None,
+    profile_canonical_kind: str = "",
+    profile_anti_patterns: list[str] | None = None,
 ) -> str:
     if excerpt_cap is not None:
         cap = excerpt_cap
@@ -511,6 +540,40 @@ def build_system_prompt(
             "",
             "Sources:",
         ]
+    elif synthesis_outline:
+        section_lines = "\n".join(f"## {s}" for s in synthesis_outline)
+        kind_line = (
+            f"This document is described as: {profile_canonical_kind}."
+            if profile_canonical_kind
+            else "Use the document profile and excerpts to structure the answer."
+        )
+        anti_lines = profile_anti_patterns or []
+        lines = [
+            preamble,
+            "",
+            contrastive_block("profile_synthesis"),
+            "",
+            "You are a legal document assistant. Answer ONLY using the provided source excerpts.",
+            kind_line,
+            "Structure the answer with these markdown sections (omit a section ONLY if sources are truly silent):",
+            section_lines,
+            "",
+            "Rules:",
+            "- Every factual sentence or bullet MUST include an inline citation [N].",
+            "- When sources are labeled table rows (Clause: / Preferred positions: / Fallback positions:), "
+            "use one bullet per clause/topic and cite the row-specific source [N] for that row.",
+            "- Do not reuse the same [N] for multiple unrelated clauses — each distinct row excerpt gets its own citation.",
+            "- Quote preferred and fallback positions verbatim from row excerpts when present; do not summarize away detail.",
+            "- When excerpts contain relevant evidence, answer substantively — do not claim sources lack all information.",
+            "- Do NOT use litigation case skeleton sections (Parties / Court & citation / Damages) unless excerpts support them.",
+        ]
+        for anti in anti_lines[:4]:
+            lines.append(f"- {anti}")
+        lines.extend([
+            "- Do not invent citation numbers.",
+            "",
+            "Sources:",
+        ])
     elif intent == "case_overview":
         lines = [
             preamble,

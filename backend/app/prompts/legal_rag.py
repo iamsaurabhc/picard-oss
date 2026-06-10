@@ -90,6 +90,22 @@ The claimed damages were £1,000 [1].
 
 Example — BAD:
 Damages were substantial. (Unsupported; no citation.)
+
+Example — GOOD (profile-driven playbook sections):
+## Signatories
+Authorized signatory Dyana Baurley (Director) for North American NDAs [1].
+
+Example — BAD (wrong litigation skeleton on non-litigation doc):
+## Court & citation
+Sources do not specify court. (Ignores playbook excerpts; wrong template.)
+""",
+    "profile_synthesis": """
+Example — GOOD (profile-driven sections from document profile):
+## Signatories
+Authorized signatory Dyana Baurley (Director) for North American NDAs [1].
+
+## Preferred positions by topic
+Standstill: 6-month term [2].
 """,
 }
 

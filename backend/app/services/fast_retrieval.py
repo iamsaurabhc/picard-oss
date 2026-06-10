@@ -58,6 +58,8 @@ def fast_retrieve_for_chat(
             section_key=h.section_key,
             bbox=parse_bbox(h.bbox_json),
             score=h.score,
+            chunk_type=h.chunk_type,
+            anchor_json=h.anchor_json,
         )
         for h in hits_raw
     ]
