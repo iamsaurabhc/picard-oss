@@ -90,7 +90,7 @@ class ChunkOut(BaseModel):
     id: str
     document_id: str
     page_number: int
-    chunk_type: Literal["heading", "paragraph", "table", "list"]
+    chunk_type: Literal["heading", "paragraph", "table", "table_header", "table_row", "list"]
     bbox: dict
     text_content: str
     heading_path: str | None
@@ -139,6 +139,8 @@ class SearchHit(BaseModel):
     section_key: str | None = None
     bbox: dict | None = None
     score: float
+    chunk_type: str | None = None
+    anchor_json: str | None = None
 
 
 class ContextBundleOut(BaseModel):

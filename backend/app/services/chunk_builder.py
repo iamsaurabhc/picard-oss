@@ -122,16 +122,46 @@ def _group_lines_into_chunks(lines: list[ParsedLine]) -> list[BuiltChunk]:
     if not lines:
         return []
 
+    from app.services.structured_table import (
+        structured_table_from_pdf_lines,
+        table_to_built_chunks,
+    )
+
     chunks: list[BuiltChunk] = []
     heading_stack: list[str] = []
     current_page = lines[0].page_number
     group: list[ParsedLine] = []
     group_type = "paragraph"
+    table_counter = 0
+    block_index = 0
+    total_blocks_est = max(len(lines) // 3, 1)
 
     def flush_group() -> None:
-        nonlocal group, group_type
+        nonlocal group, group_type, block_index, table_counter
         if not group:
             return
+        heading_path = " > ".join(heading_stack) if heading_stack else None
+        if group_type == "table":
+            table_id = f"t{table_counter}"
+            table_counter += 1
+            structured = structured_table_from_pdf_lines(
+                group,
+                table_id=table_id,
+                heading_path=heading_path,
+                block_index=block_index,
+            )
+            block_index += 1
+            page_num = group[0].page_number
+            chunks.extend(
+                table_to_built_chunks(
+                    structured,
+                    page_number=page_num,
+                    total_blocks=total_blocks_est,
+                )
+            )
+            group = []
+            return
+
         text = "\n".join(l.text for l in group)
         if len(text.strip()) < 3:
             group = []
@@ -142,7 +172,6 @@ def _group_lines_into_chunks(lines: list[ParsedLine]) -> list[BuiltChunk]:
         y1 = max(l.y1 for l in group)
         pw = group[0].page_width
         ph = group[0].page_height
-        heading_path = " > ".join(heading_stack) if heading_stack else None
         chunks.append(
             BuiltChunk(
                 page_number=group[0].page_number,
@@ -154,11 +183,14 @@ def _group_lines_into_chunks(lines: list[ParsedLine]) -> list[BuiltChunk]:
                 token_count=len(text.split()),
             )
         )
+        block_index += 1
         group = []
 
     for line in lines:
-        if line.page_number != current_page:
+        if line.page_number != current_page and group_type != "table":
             flush_group()
+            current_page = line.page_number
+        elif line.page_number != current_page and group_type == "table":
             current_page = line.page_number
 
         ctype = _infer_chunk_type(line.text)
@@ -182,6 +214,7 @@ def _group_lines_into_chunks(lines: list[ParsedLine]) -> list[BuiltChunk]:
                     token_count=len(title.split()),
                 )
             )
+            block_index += 1
             continue
 
         if not group:
