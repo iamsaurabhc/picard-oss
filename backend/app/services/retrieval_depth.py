@@ -107,6 +107,9 @@ def resolve_retrieval_depth(
     is_listing: bool = False,
 ) -> RetrievalDepthPolicy:
     tier, signals = infer_depth_demand(query, understanding)
+    if understanding.depth_demand:
+        tier = understanding.depth_demand
+        signals = [*signals, f"planner:{understanding.depth_demand}"]
 
     if is_listing:
         return RetrievalDepthPolicy(

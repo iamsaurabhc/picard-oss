@@ -20,6 +20,8 @@ class FtsHit:
     section_key: str | None
     bbox_json: str
     score: float
+    chunk_type: str | None = None
+    anchor_json: str | None = None
 
 
 FTS_SPECIAL = re.compile(r'[*?:\()"\'\\.\-]')
@@ -185,7 +187,8 @@ def fts_search(
     sql_parts = [
         """
         SELECT c.id, c.document_id, c.page_number, c.text_content, c.heading_path,
-               c.section_key, c.bbox_json, bm25(chunks_fts) AS score
+               c.section_key, c.bbox_json, c.chunk_type, c.anchor_json,
+               bm25(chunks_fts) AS score
         FROM chunks_fts
         JOIN chunks c ON c.rowid = chunks_fts.rowid
         JOIN documents d ON d.id = c.document_id
@@ -227,6 +230,8 @@ def fts_search(
                 section_key=row["section_key"],
                 bbox_json=row["bbox_json"],
                 score=score,
+                chunk_type=row.get("chunk_type"),
+                anchor_json=row.get("anchor_json"),
             )
         )
         if len(hits) >= top_k:
@@ -251,7 +256,8 @@ def fts_search_on_pages(
             text(
                 """
                 SELECT c.id, c.document_id, c.page_number, c.text_content, c.heading_path,
-                       c.section_key, c.bbox_json, bm25(chunks_fts) AS score
+                       c.section_key, c.bbox_json, c.chunk_type, c.anchor_json,
+                       bm25(chunks_fts) AS score
                 FROM chunks_fts
                 JOIN chunks c ON c.rowid = chunks_fts.rowid
                 JOIN documents d ON d.id = c.document_id
@@ -275,6 +281,8 @@ def fts_search_on_pages(
                     section_key=row["section_key"],
                     bbox_json=row["bbox_json"],
                     score=float(row["score"]),
+                    chunk_type=row.get("chunk_type"),
+                    anchor_json=row.get("anchor_json"),
                 )
             )
     hits.sort(key=lambda h: h.score)
