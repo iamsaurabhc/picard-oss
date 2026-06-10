@@ -35,6 +35,7 @@ def test_build_chunks_from_docx(tmp_path: Path):
     types = {c.chunk_type for c in chunks}
     assert "heading" in types
     assert "paragraph" in types or "list" in types
+    assert "table_header" in types or "table_row" in types or "table" in types
     assert any(c.heading_path and "Condition A" in c.heading_path for c in chunks)
     assert all(c.anchor_json for c in chunks)
 

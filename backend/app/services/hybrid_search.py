@@ -111,6 +111,8 @@ def vector_search(
                         section_key=c.section_key,
                         bbox_json=c.bbox_json,
                         score=-sim_by_id.get(c.id, 0.0),
+                        chunk_type=c.chunk_type,
+                        anchor_json=c.anchor_json,
                     ),
                     sim_by_id.get(c.id, 0.0),
                 )
@@ -146,6 +148,8 @@ def vector_search(
                 section_key=chunk.section_key,
                 bbox_json=chunk.bbox_json,
                 score=-sim,
+                chunk_type=chunk.chunk_type,
+                anchor_json=chunk.anchor_json,
             ),
             sim,
         ))

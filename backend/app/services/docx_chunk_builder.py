@@ -15,6 +15,10 @@ from app.services.chunk_builder import (
     _is_heading,
     _section_key,
 )
+from app.services.structured_table import (
+    structured_table_from_docx_grid,
+    table_to_built_chunks,
+)
 
 _LIST_RE = re.compile(r"^[\-\*•]\s+")
 
@@ -43,12 +47,12 @@ def _paragraph_has_page_break(paragraph: Paragraph) -> bool:
     return False
 
 
-def _table_to_text(table: Table) -> str:
-    rows: list[str] = []
+def _table_to_grid(table: Table) -> list[list[str]]:
+    rows: list[list[str]] = []
     for row in table.rows:
         cells = [cell.text.strip() for cell in row.cells]
-        rows.append("\t".join(cells))
-    return "\n".join(rows).strip()
+        rows.append(cells)
+    return rows
 
 
 def _placeholder_bbox(block_index: int, total_blocks: int) -> dict:
@@ -82,6 +86,7 @@ def build_chunks_from_docx(docx_path: str) -> tuple[list[BuiltChunk], int, dict]
     doc = Document(docx_path)
     blocks: list[tuple[str, Paragraph | Table, int]] = []
     page_number = 1
+    table_counter = 0
 
     for item in doc.iter_inner_content():
         if isinstance(item, Paragraph):
@@ -92,8 +97,8 @@ def build_chunks_from_docx(docx_path: str) -> tuple[list[BuiltChunk], int, dict]
                 continue
             blocks.append(("paragraph", item, page_number))
         elif isinstance(item, Table):
-            text = _table_to_text(item)
-            if text:
+            grid = _table_to_grid(item)
+            if any(any(c.strip() for c in row) for row in grid):
                 blocks.append(("table", item, page_number))
 
     total_blocks = max(len(blocks), 1)
@@ -103,15 +108,29 @@ def build_chunks_from_docx(docx_path: str) -> tuple[list[BuiltChunk], int, dict]
     for block_index, (kind, item, block_page) in enumerate(blocks):
         if kind == "table":
             assert isinstance(item, Table)
-            text = _table_to_text(item)
-            chunk_type = "table"
-            anchor = {"table_index": block_index, "block_index": block_index}
+            grid = _table_to_grid(item)
             heading_path = " > ".join(heading_stack) if heading_stack else None
+            table_id = f"t{table_counter}"
+            table_counter += 1
+            structured = structured_table_from_docx_grid(
+                table_id=table_id,
+                rows_grid=grid,
+                page_number=block_page,
+                heading_path=heading_path,
+                block_index=block_index,
+            )
+            built.extend(
+                table_to_built_chunks(
+                    structured,
+                    page_number=block_page,
+                    total_blocks=total_blocks,
+                )
+            )
         else:
             assert isinstance(item, Paragraph)
             text = item.text.strip()
             chunk_type = _infer_chunk_type_from_paragraph(item)
-            anchor = {"para_id": _para_id(item), "block_index": block_index}
+            anchor = {"para_id": _para_id(item), "block_index": block_index, "kind": chunk_type}
             if chunk_type == "heading":
                 depth = _heading_level(item)
                 if depth is None:
@@ -124,18 +143,18 @@ def build_chunks_from_docx(docx_path: str) -> tuple[list[BuiltChunk], int, dict]
             else:
                 heading_path = " > ".join(heading_stack) if heading_stack else None
 
-        built.append(
-            BuiltChunk(
-                page_number=block_page,
-                chunk_type=chunk_type,
-                bbox_json=json.dumps(_placeholder_bbox(block_index, total_blocks)),
-                text_content=text,
-                heading_path=heading_path,
-                section_key=_section_key(heading_path),
-                token_count=len(text.split()),
-                anchor_json=json.dumps(anchor),
+            built.append(
+                BuiltChunk(
+                    page_number=block_page,
+                    chunk_type=chunk_type,
+                    bbox_json=json.dumps(_placeholder_bbox(block_index, total_blocks)),
+                    text_content=text,
+                    heading_path=heading_path,
+                    section_key=_section_key(heading_path),
+                    token_count=len(text.split()),
+                    anchor_json=json.dumps(anchor),
+                )
             )
-        )
 
     page_count = max((c.page_number for c in built), default=1)
     meta = {
@@ -143,6 +162,7 @@ def build_chunks_from_docx(docx_path: str) -> tuple[list[BuiltChunk], int, dict]
         "ocr_engine": "none",
         "page_count": page_count,
         "chunk_count": len(built),
+        "table_count": table_counter,
     }
     return built, page_count, meta
 

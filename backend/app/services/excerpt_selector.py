@@ -630,6 +630,68 @@ def _refine_excerpt(
     return best
 
 
+def is_table_row_hit(hit: SearchHit) -> bool:
+    return (hit.chunk_type or "") == "table_row"
+
+
+def table_row_excerpt(hit: SearchHit, max_chars: int) -> str:
+    text = (hit.text_content or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def _term_overlap_score(text: str, terms: list[str]) -> int:
+    t_cf = text.casefold()
+    return sum(1 for term in terms if term.casefold() in t_cf)
+
+
+def rank_table_row_hits(
+    hits: list[SearchHit],
+    *,
+    question: str,
+    sub_questions: list[SubQuestion] | None = None,
+    max_rows: int = 6,
+) -> list[SearchHit]:
+    row_hits = [h for h in hits if is_table_row_hit(h)]
+    if not row_hits:
+        return hits
+    q_terms = set(_query_terms(question))
+    for sq in sub_questions or []:
+        q_terms |= _query_terms(sq.question)
+    scored = sorted(
+        row_hits,
+        key=lambda h: _term_overlap_score(h.text_content or "", list(q_terms)),
+        reverse=True,
+    )
+    return scored[:max_rows]
+
+
+def overview_row_excerpt(
+    hits: list[SearchHit],
+    max_chars: int,
+    *,
+    question: str = "",
+    sub_questions: list[SubQuestion] | None = None,
+) -> dict[str, str]:
+    """Deterministic row excerpts for table-primary documents."""
+    ranked = rank_table_row_hits(
+        hits, question=question, sub_questions=sub_questions, max_rows=6,
+    )
+    per_row = max(max_chars // max(len(ranked), 1), 200)
+    out: dict[str, str] = {}
+    for h in ranked:
+        out[h.chunk_id] = table_row_excerpt(h, per_row)
+    for h in hits:
+        if h.chunk_id in out:
+            continue
+        if (h.chunk_type or "") in {"table_header", "heading"}:
+            out[h.chunk_id] = table_row_excerpt(h, min(max_chars, 400))
+        elif is_table_row_hit(h):
+            out[h.chunk_id] = table_row_excerpt(h, per_row)
+    return out
+
+
 def select_excerpts(
     hits: list[SearchHit],
     *,
@@ -646,6 +708,14 @@ def select_excerpts(
     """Return chunk_id -> excerpt text. Uses SLM when enabled, else best window."""
     if not hits:
         return {}
+
+    if any(is_table_row_hit(h) for h in hits):
+        return overview_row_excerpt(
+            hits,
+            max_chars,
+            question=question,
+            sub_questions=sub_questions,
+        )
 
     if not settings.enable_excerpt_selector:
         return {

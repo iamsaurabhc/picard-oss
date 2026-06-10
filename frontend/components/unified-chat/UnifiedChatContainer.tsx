@@ -62,6 +62,7 @@ export function UnifiedChatContainer() {
   const [loadingThread, setLoadingThread] = useState(false);
   const [activeRef, setActiveRef] = useState<ChatReference | null>(null);
   const [activeMessageRefs, setActiveMessageRefs] = useState<ChatReference[] | null>(null);
+  const [activeClaimText, setActiveClaimText] = useState<string | null>(null);
   const [pdfDocId, setPdfDocId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = usePersistedBoolean(
@@ -378,11 +379,15 @@ export function UnifiedChatContainer() {
     setHistoryCollapsed,
   ]);
 
-  const handleCitationClick = useCallback((ref: ChatReference, refs: ChatReference[]) => {
-    setActiveRef(ref);
-    setActiveMessageRefs(refs);
-    setPdfDocId(ref.document_id ?? null);
-  }, []);
+  const handleCitationClick = useCallback(
+    (ref: ChatReference, refs: ChatReference[], claimText?: string) => {
+      setActiveRef(ref);
+      setActiveMessageRefs(refs);
+      setActiveClaimText(claimText ?? null);
+      setPdfDocId(ref.document_id ?? scopedDocumentIds[0] ?? null);
+    },
+    [scopedDocumentIds]
+  );
 
   const showPdfPanel = pdfDocId != null && activeRef != null;
   const showActivityPanel = isStreaming || activity.steps.length > 0;
@@ -544,9 +549,11 @@ export function UnifiedChatContainer() {
               documentId={pdfDocId!}
               activeRef={activeRef!}
               highlights={activeMessageRefs ?? []}
+              activeClaimText={activeClaimText}
               onClose={() => {
                 setPdfDocId(null);
                 setActiveRef(null);
+                setActiveClaimText(null);
               }}
             />
           }

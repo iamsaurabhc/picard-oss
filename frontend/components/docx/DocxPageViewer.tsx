@@ -12,8 +12,8 @@ import { Loader2, MessageSquare, PanelRightClose, ZoomIn, ZoomOut } from "lucide
 import { Button } from "@/components/ui/button";
 import { applyDocxSuggestion } from "@/lib/docxSuggestions";
 import { subscribeDocxSuggestions } from "@/lib/docxSuggestionStore";
-import { documentFileUrl } from "@/lib/picardApi";
-import type { DocxSuggestion } from "@/lib/picardApi";
+import { clearDocxCitationHighlight, navigateToDocxCitation } from "@/lib/docxCitation";
+import { documentFileUrl, type ChatReference, type DocxSuggestion } from "@/lib/picardApi";
 import { cn } from "@/lib/utils";
 
 const MODES: { value: DocumentMode; label: string; hint: string }[] = [
@@ -135,6 +135,10 @@ type Props = {
   onModeChange?: (mode: DocumentMode) => void;
   onSave?: (buffer: ArrayBuffer) => Promise<void>;
   saving?: boolean;
+  /** Chat citation panel: read-only, scroll to cited row text. */
+  citationPanel?: boolean;
+  activeCitation?: ChatReference | null;
+  activeClaimText?: string | null;
 };
 
 export function DocxPageViewer({
@@ -144,6 +148,9 @@ export function DocxPageViewer({
   onModeChange,
   onSave,
   saving,
+  citationPanel = false,
+  activeCitation = null,
+  activeClaimText = null,
 }: Props) {
   const editorRef = useRef<SuperDocRef>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -162,7 +169,7 @@ export function DocxPageViewer({
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentCount, setCommentCount] = useState(0);
 
-  const mode = controlledMode ?? internalMode;
+  const mode = citationPanel ? "viewing" : (controlledMode ?? internalMode);
   modeRef.current = mode;
   docxViewerModeRef.current = mode;
 
@@ -329,6 +336,39 @@ export function DocxPageViewer({
   }, [commentsOpen, editorReady, mountCommentsList]);
 
   useEffect(() => {
+    if (!citationPanel || !editorReady || !activeCitation) return;
+
+    const instance = editorRef.current?.getInstance() ?? null;
+    if (!instance) return;
+
+    const claim = activeClaimText ?? undefined;
+    let cancelled = false;
+
+    const tryNavigate = async () => {
+      if (cancelled) return;
+      await navigateToDocxCitation(instance, activeCitation, claim);
+    };
+
+    void tryNavigate();
+
+    const delays = [200, 500, 1000, 1800];
+    const timers = delays.map((ms) => window.setTimeout(() => void tryNavigate(), ms));
+
+    return () => {
+      cancelled = true;
+      timers.forEach((id) => window.clearTimeout(id));
+    };
+  }, [citationPanel, editorReady, activeCitation, activeClaimText]);
+
+  useEffect(() => {
+    if (!citationPanel) return;
+    return () => {
+      const instance = editorRef.current?.getInstance() ?? null;
+      void clearDocxCitationHighlight(instance);
+    };
+  }, [citationPanel, documentId]);
+
+  useEffect(() => {
     return () => {
       const instance = editorRef.current?.getInstance();
       if (instance && commentsListMountedRef.current) {
@@ -356,6 +396,12 @@ export function DocxPageViewer({
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-3 py-2">
+        {citationPanel && activeCitation?.preview ? (
+          <p className="min-w-0 flex-1 truncate text-xs text-neutral-600" title={activeCitation.preview}>
+            {activeCitation.preview.replace(/\n/g, " · ").slice(0, 200)}
+          </p>
+        ) : null}
+        {!citationPanel ? (
         <div className="flex items-center gap-0.5 rounded-md border border-neutral-200 bg-neutral-50 p-0.5">
           {MODES.map((item) => (
             <button
@@ -374,8 +420,9 @@ export function DocxPageViewer({
             </button>
           ))}
         </div>
+        ) : null}
 
-        <div className="flex items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-1 py-0.5">
+        <div className={cn("flex items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-1 py-0.5", citationPanel && "ml-auto")}>
           <Button
             type="button"
             size="sm"
@@ -420,6 +467,7 @@ export function DocxPageViewer({
           </Button>
         </div>
 
+        {!citationPanel ? (
         <Button
           type="button"
           size="sm"
@@ -440,8 +488,9 @@ export function DocxPageViewer({
             </span>
           ) : null}
         </Button>
+        ) : null}
 
-        {onSave ? (
+        {onSave && !citationPanel ? (
           <Button
             size="sm"
             className="ml-auto"
@@ -505,6 +554,7 @@ export function DocxPageViewer({
           />
         </div>
 
+        {!citationPanel ? (
         <aside
           className={cn(
             "docx-comments-panel flex shrink-0 flex-col border-neutral-200 bg-white transition-[width] duration-200 ease-out",
@@ -534,6 +584,7 @@ export function DocxPageViewer({
           </div>
           <div ref={commentsPanelRef} className="min-h-0 flex-1 overflow-y-auto" />
         </aside>
+        ) : null}
       </div>
     </div>
   );

@@ -831,6 +831,15 @@ async def _stream_chat_body(
             coverage_report=coverage_report,
         )
         retrieval_diagnostics["coverage_report_in_prompt"] = bool(coverage_report)
+        if coverage_report and body.document_ids:
+            gaps = coverage_report.get("gaps_filled") or coverage_report.get("missing_facets") or []
+            if gaps:
+                from app.services.document_profile import amplify_profile_job
+                from app.services.ingestion import _executor
+
+                doc_id = body.document_ids[0]
+                facet_gaps = list(gaps)
+                _executor.submit(amplify_profile_job, doc_id, facet_gaps)
         if body.tabular_review_id:
             from app.services.tabular import build_tabular_chat_context
 

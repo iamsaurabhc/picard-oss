@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 type Props = {
   message: UnifiedMessage;
-  onCitationClick?: (ref: ChatReference, refs: ChatReference[]) => void;
+  onCitationClick?: (ref: ChatReference, refs: ChatReference[], claimText?: string) => void;
 };
 
 export function MessageRenderer({ message, onCitationClick }: Props) {
@@ -44,7 +44,7 @@ export function MessageRenderer({ message, onCitationClick }: Props) {
                     claimText,
                     message.references ?? undefined
                   );
-                  onCitationClick?.(resolved, message.references ?? []);
+                  onCitationClick?.(resolved, message.references ?? [], claimText);
                 }}
               />
             )}
@@ -116,7 +116,7 @@ export function MessageList({
   streaming,
 }: {
   messages: UnifiedMessage[];
-  onCitationClick?: (ref: ChatReference, refs: ChatReference[]) => void;
+  onCitationClick?: (ref: ChatReference, refs: ChatReference[], claimText?: string) => void;
   streaming?: boolean;
 }) {
   return (

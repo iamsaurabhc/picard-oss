@@ -65,14 +65,17 @@ def chunks_to_docx_bytes(chunks: list[Chunk]) -> bytes:
             doc.add_heading(text, level=level)
         elif chunk.chunk_type == "list":
             _add_list_paragraph(doc, text)
-        elif chunk.chunk_type == "table":
-            rows = [line.split("\t") for line in text.split("\n") if line.strip()]
-            if rows:
-                table = doc.add_table(rows=len(rows), cols=len(rows[0]))
-                for r_idx, row in enumerate(rows):
-                    for c_idx, cell_text in enumerate(row):
-                        if c_idx < len(table.rows[r_idx].cells):
-                            table.rows[r_idx].cells[c_idx].text = cell_text
+        elif chunk.chunk_type in {"table", "table_header", "table_row"}:
+            if chunk.chunk_type == "table":
+                rows = [line.split("\t") for line in text.split("\n") if line.strip()]
+                if rows:
+                    table = doc.add_table(rows=len(rows), cols=len(rows[0]))
+                    for r_idx, row in enumerate(rows):
+                        for c_idx, cell_text in enumerate(row):
+                            if c_idx < len(table.rows[r_idx].cells):
+                                table.rows[r_idx].cells[c_idx].text = cell_text
+                else:
+                    doc.add_paragraph(text)
             else:
                 doc.add_paragraph(text)
         else:

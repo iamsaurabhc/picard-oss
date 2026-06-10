@@ -126,6 +126,11 @@ class QueryUnderstanding(BaseModel):
     used_llm: bool = False
     rule_merges: list[str] = Field(default_factory=list)
     pass_repairs: list[str] = Field(default_factory=list)
+    synthesis_outline: list[str] = Field(default_factory=list)
+    depth_demand: Literal["pinpoint", "standard", "deep", "exhaustive"] | None = None
+    retrieval_unit: Literal["table_row", "paragraph", "page", "table"] | None = None
+    profile_canonical_kind: str = ""
+    profile_anti_patterns: list[str] = Field(default_factory=list)
 
 
 QUERY_PLANNER_PROMPT = """Analyze this legal document search question and plan retrieval passes.
@@ -154,12 +159,20 @@ Return JSON only:
     {{"label": "short_label", "fts_terms": ["term1", "term2"], "operator": "AND", "pin_best": true}}
   ],
   "coverage_goal": "broad matter summary | pinpoint fact | relevant passages",
+  "synthesis_outline": ["dynamic markdown section headings for the answer"],
+  "depth_demand": "pinpoint | standard | deep | exhaustive",
+  "retrieval_unit": "table_row | paragraph | page | table",
   "confidence": 0.0-1.0
 }}
 
 {document_context}
 
 Rules:
+- Read document_profile in context: use synthesis_outline, overview_facets, column headers, and primary_unit from profiles.
+- Use case_overview ONLY when document profile kind_labels indicate litigation or regulatory proceedings.
+- For table_row primary_unit documents: use synthesis_outline from profile; retrieval_unit should be table_row.
+- Emit synthesis_outline tailored to the user question and document profile (not generic litigation sections).
+- depth_demand: deep for broad document summaries; pinpoint for single-fact lookups.
 - Use vocabulary from the document context previews, parties, entities, and headings — not generic legal clichés.
 - For compound questions (multiple ? or distinct sub-topics): emit one sub_question AND one search_pass per sub-part.
 - Each search_pass uses exactly 2 FTS terms (AND by default). Never use question-framing words as terms (name, date, what, when, who, how, age).
@@ -330,6 +343,8 @@ def _catalog_party_constraint(
     """Match workspace party entities by token overlap (no ORG_PARTY_PATTERN)."""
     from app.db.models import Entity
 
+    if not hasattr(db, "scalars"):
+        return None
     tokens = set(_extract_tokens(query))
     if not tokens:
         return None
@@ -748,6 +763,101 @@ def _apply_listing_fields(
     return understanding
 
 
+def _sub_questions_from_profile_facets(facets: list[dict]) -> list[SubQuestion]:
+    out: list[SubQuestion] = []
+    for f in facets:
+        if not isinstance(f, dict):
+            continue
+        label = str(f.get("label") or "").strip()
+        question = str(f.get("question") or "").strip()
+        terms = [str(t) for t in (f.get("fts_terms") or []) if str(t).strip()]
+        if label and question:
+            out.append(
+                SubQuestion(
+                    label=label,
+                    question=question,
+                    fts_terms=terms[:4],
+                    pin_best=True,
+                )
+            )
+    return out
+
+
+def _apply_profile_structural_guard(
+    understanding: QueryUnderstanding,
+    document_context: DocumentContext,
+) -> QueryUnderstanding:
+    """Single structural guard: table_row profiles should not use litigation case_overview."""
+    if not document_context.document_profiles:
+        return understanding
+    primary_units = [
+        (p.get("structure") or {}).get("primary_unit")
+        for p in document_context.document_profiles.values()
+    ]
+    if not all(u == "table_row" for u in primary_units if u):
+        return understanding
+    if understanding.intent != "case_overview":
+        return understanding
+    merges = list(understanding.rule_merges)
+    merges.append("profile_guard:case_overview_to_general_table_row")
+    outline: list[str] = list(understanding.synthesis_outline)
+    anti: list[str] = list(understanding.profile_anti_patterns)
+    kind = ""
+    for p in document_context.document_profiles.values():
+        if p.get("synthesis_outline") and not outline:
+            outline = list(p["synthesis_outline"])
+        if p.get("anti_patterns"):
+            anti.extend(p["anti_patterns"])
+        if p.get("canonical_kind") and not kind:
+            kind = str(p["canonical_kind"])
+    return understanding.model_copy(
+        update={
+            "intent": "general",
+            "synthesis_outline": outline,
+            "profile_canonical_kind": kind,
+            "profile_anti_patterns": anti,
+            "retrieval_unit": understanding.retrieval_unit or "table_row",
+            "rule_merges": merges,
+        }
+    )
+
+
+def _merge_profile_into_understanding(
+    understanding: QueryUnderstanding,
+    document_context: DocumentContext,
+) -> QueryUnderstanding:
+    if not document_context.document_profiles:
+        return understanding
+    outline = list(understanding.synthesis_outline)
+    kind = understanding.profile_canonical_kind
+    anti = list(understanding.profile_anti_patterns)
+    retrieval_unit = understanding.retrieval_unit
+    sub_qs = list(understanding.sub_questions)
+    for p in document_context.document_profiles.values():
+        if not outline and p.get("synthesis_outline"):
+            outline = list(p["synthesis_outline"])
+        if not kind and p.get("canonical_kind"):
+            kind = str(p["canonical_kind"])
+        if not anti and p.get("anti_patterns"):
+            anti = list(p["anti_patterns"])
+        structure = p.get("structure") or {}
+        if not retrieval_unit and structure.get("primary_unit"):
+            pu = structure["primary_unit"]
+            if pu in {"table_row", "paragraph", "page", "table"}:
+                retrieval_unit = pu
+        if not sub_qs and structure.get("overview_facets"):
+            sub_qs = _sub_questions_from_profile_facets(structure["overview_facets"])
+    return understanding.model_copy(
+        update={
+            "synthesis_outline": outline,
+            "profile_canonical_kind": kind,
+            "profile_anti_patterns": anti,
+            "retrieval_unit": retrieval_unit,
+            "sub_questions": sub_qs or understanding.sub_questions,
+        }
+    )
+
+
 def _needs_overview_pass_expansion(passes: list[SearchPass]) -> bool:
     return len(passes) < 4
 
@@ -1164,6 +1274,21 @@ def _llm_understand(query: str, document_context: DocumentContext | None = None)
         for c in data.get("constraints") or []:
             if isinstance(c, dict) and c.get("type") and c.get("canonical"):
                 constraints.append(QueryConstraint(**c))
+        depth_raw = str(data.get("depth_demand") or "").strip().lower()
+        depth_demand = (
+            depth_raw
+            if depth_raw in {"pinpoint", "standard", "deep", "exhaustive"}
+            else None
+        )
+        unit_raw = str(data.get("retrieval_unit") or "").strip().lower()
+        retrieval_unit = (
+            unit_raw
+            if unit_raw in {"table_row", "paragraph", "page", "table"}
+            else None
+        )
+        synthesis_outline = [
+            str(s).strip() for s in (data.get("synthesis_outline") or []) if str(s).strip()
+        ]
         understanding = QueryUnderstanding(
             retrieval_mode=data.get("retrieval_mode", "SIMPLE"),
             intent=intent,
@@ -1182,6 +1307,9 @@ def _llm_understand(query: str, document_context: DocumentContext | None = None)
             coverage_goal=str(data.get("coverage_goal") or ""),
             confidence=float(data.get("confidence", 0.85)),
             used_llm=True,
+            synthesis_outline=synthesis_outline,
+            depth_demand=depth_demand,
+            retrieval_unit=retrieval_unit,
         )
         return understanding
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
@@ -1470,6 +1598,9 @@ def understand_query(
         if llm_result is not None:
             understanding = llm_result
 
+    understanding = _apply_profile_structural_guard(understanding, document_context)
+    understanding = _merge_profile_into_understanding(understanding, document_context)
+
     if settings.enable_regex_nlp and understanding.used_llm:
         rule_constraints = _extract_rule_constraints(query)
         understanding = _merge_rule_constraints(understanding, rule_constraints)
@@ -1585,6 +1716,13 @@ def understand_query(
         understanding = understanding.model_copy(
             update={"sub_questions": _overview_sub_questions_from_facets(facets)},
         )
+    elif understanding.synthesis_outline and not understanding.sub_questions:
+        for p in document_context.document_profiles.values():
+            facets = (p.get("structure") or {}).get("overview_facets") or []
+            sub_qs = _sub_questions_from_profile_facets(facets)
+            if sub_qs:
+                understanding = understanding.model_copy(update={"sub_questions": sub_qs})
+                break
 
     return understanding
 
@@ -1612,4 +1750,12 @@ def understanding_summary(u: QueryUnderstanding) -> dict:
         summary["resolved_canonicals"] = u.target_entity.resolved_canonicals
     if u.sub_questions:
         summary["sub_question_labels"] = [sq.label for sq in u.sub_questions]
+    if u.synthesis_outline:
+        summary["synthesis_outline"] = u.synthesis_outline[:8]
+    if u.retrieval_unit:
+        summary["retrieval_unit"] = u.retrieval_unit
+    if u.depth_demand:
+        summary["depth_demand"] = u.depth_demand
+    if u.profile_canonical_kind:
+        summary["profile_canonical_kind"] = u.profile_canonical_kind
     return summary
